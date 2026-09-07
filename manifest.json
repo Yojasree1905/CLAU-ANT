@@ -1,16 +1,51 @@
 {
-  "name": "SJT 7th Floor Assistant",
-  "short_name": "SJT Assist",
-  "description": "Voice-guided indoor navigation and obstacle warnings for the SJT 7th floor corner.",
+  "id": "/index.html",
+  "name": "Nav Assist — Voice Indoor Navigation",
+  "short_name": "Nav Assist",
+  "description": "Voice-guided indoor navigation and real-time obstacle warnings for the SJT 7th floor corner and H Block 3rd floor, with an AR-style ground path overlay. Wake word: \"Hey Nav\".",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#1c1b19",
-  "theme_color": "#b5342a",
+  "background_color": "#0f1115",
+  "theme_color": "#121316",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["navigation", "accessibility", "utilities", "travel"],
+  "prefer_related_applications": false,
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshots/01-idle.png",
+      "sizes": "1080x2280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Tap Start or say \"Hey Nav\" to begin"
+    },
+    {
+      "src": "screenshots/02-listening.png",
+      "sizes": "1080x2280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Listening for a destination by voice"
+    },
+    {
+      "src": "screenshots/03-sidebar.png",
+      "sizes": "1080x2280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Pick a floor, browse destinations, and adjust settings"
+    },
+    {
+      "src": "screenshots/04-navigating.png",
+      "sizes": "1080x2280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Turn-by-turn voice guidance with an AR ground path overlay"
+    }
   ]
 }

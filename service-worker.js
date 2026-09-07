@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sjt7-navassist-v3';
+const CACHE_NAME = 'sjt7-navassist-v4';
 const CORE_ASSETS = [
   './',
   './index.html',

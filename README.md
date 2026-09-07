@@ -107,6 +107,27 @@ reference and for re-deriving the map (or the visual fingerprints — see
   the actual numbers off the doors, split this into per-room nodes the
   same way SJT has `room_715` as its own node.
 
+## PWA manifest quality (PWABuilder scan)
+
+Running the hosted URL through pwabuilder.com surfaces "Action Items" —
+mostly optional metadata. What's actually addressed:
+
+- **Real screenshots** (`screenshots/`) generated from the running app via
+  Playwright — idle screen, listening state, the settings sidebar, and an
+  active route with the AR ground path + landmark bubble — and referenced
+  in `manifest.json`'s `screenshots` array.
+- **`id`**, **`categories`**, **`lang`**, **`dir`**, and
+  **`prefer_related_applications`** added to the manifest.
+
+Left alone, on purpose: `related_applications` (no native app exists),
+IARC rating (a content-age rating doesn't meaningfully apply to a
+navigation utility), and the various "enhancement" items (`share_target`,
+`file_handlers`, `protocol_handlers`, `widgets`, `edge_side_panel`,
+`windows-control-overlay`, `tabbed`, notes-app registration, background
+sync, push notifications) — none of them fit what this app actually does,
+and adding manifest fields with no real behavior behind them just adds
+surface area to maintain.
+
 ## Run it
 
 Needs HTTPS (or `localhost`) for camera/mic/motion permissions:
