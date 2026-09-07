@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Voice Navigation Assistant</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<meta name="theme-color" content="#121316" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+  <!-- AR Viewport -->
+  <video id="camera" playsinline muted></video>
+  <canvas id="ar-canvas"></canvas>
+
+  <!-- Sleek Frosted Top Bar -->
+  <header id="top-bar">
+    <button id="sidebar-toggle-btn" class="icon-btn" aria-label="Open settings and destinations" aria-haspopup="dialog">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="4" y1="6" x2="20" y2="6"></line>
+        <line x1="4" y1="12" x2="20" y2="12"></line>
+        <line x1="4" y1="18" x2="20" y2="18"></line>
+      </svg>
+    </button>
+
+    <div id="status-badge" role="status" aria-live="polite">
+      <span class="venue-indicator" id="current-venue-label">SJT — 7th Floor</span>
+      <span class="status-sep">·</span>
+      <span class="status-detail" id="status-text">Tap Start to begin</span>
+    </div>
+
+    <div id="assistant-indicator" class="indicator-pill state-idle" title="Assistant status">
+      <span class="indicator-dot"></span>
+      <span class="indicator-label" id="indicator-text">Ready</span>
+    </div>
+  </header>
+
+  <!-- Floating Subtitle HUD for Spoken Turn Directions & Hazard Alerts -->
+  <div id="subtitle-hud" aria-live="assertive">
+    <p id="subtitle"></p>
+  </div>
+
+  <!-- Bottom Voice Assistant Control Hub -->
+  <div id="voice-hub">
+    <!-- Active Route Controls (visible during navigation) -->
+    <div id="route-controls" class="hidden">
+      <button id="repeat-btn" class="pill-action-btn" aria-label="Repeat last instruction">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="1 4 1 10 7 10"></polyline>
+          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+        </svg>
+        <span>Repeat</span>
+      </button>
+
+      <button id="stop-btn" class="pill-action-btn pill-danger" aria-label="Stop navigation">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+        </svg>
+        <span>End Route</span>
+      </button>
+    </div>
+
+    <!-- Voice Orb / Central Mic Trigger -->
+    <div class="voice-orb-wrapper">
+      <div class="pulse-ring ring-1"></div>
+      <div class="pulse-ring ring-2"></div>
+      <button id="mic-btn" class="voice-orb" aria-label="Start Voice Assistant">
+        <svg id="mic-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+          <line x1="12" y1="19" x2="12" y2="23"></line>
+          <line x1="8" y1="23" x2="16" y2="23"></line>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Live Voice State Text / Quick Suggestions -->
+    <p id="voice-hint" class="voice-hint">Say "Hey Nav" or tap mic to begin</p>
+  </div>
+
+  <!-- Left Sidebar Drawer (All Settings & Destinations) -->
+  <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+  <aside id="settings-sidebar" class="sidebar" role="dialog" aria-modal="true" aria-label="Settings and destinations">
+    <div class="sidebar-header">
+      <div class="sidebar-title-group">
+        <h2>Assistant Settings</h2>
+        <span class="sidebar-subtitle">Preferences & Venues</span>
+      </div>
+      <button id="sidebar-close-btn" class="icon-btn close-btn" aria-label="Close settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <div class="sidebar-content">
+      <!-- Section 1: Active Floor / Venue -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">Active Venue / Floor</h3>
+        <p class="section-desc">You can also say <em>"Hey Nav, switch floor"</em> at any time.</p>
+        <div id="venue-picker" class="venue-cards" role="radiogroup" aria-label="Select venue floor">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+
+      <!-- Section 2: Destinations Directory -->
+      <section class="sidebar-section">
+        <div class="section-header-row">
+          <h3 class="section-heading" id="dest-section-heading">Known Destinations</h3>
+          <span id="dest-count-badge" class="count-badge">0 places</span>
+        </div>
+        <p class="section-desc" id="dest-section-desc">Or speak: <em>"Hey Nav, take me to [destination]"</em></p>
+        <div class="dest-search-wrap">
+          <input type="text" id="dest-filter" placeholder="Filter places..." aria-label="Filter destinations" />
+        </div>
+        <ul id="dest-list" class="dest-menu-list" role="listbox" aria-label="Destinations on this floor">
+          <!-- Populated by JS -->
+        </ul>
+      </section>
+
+      <!-- Section 3: Voice & Audio Settings -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">Voice & Audio</h3>
+        <div class="setting-item">
+          <div class="setting-label-wrap">
+            <label for="voice-rate-slider">Voice Guidance Speed</label>
+            <span id="voice-rate-val" class="setting-val">1.0x</span>
+          </div>
+          <input type="range" id="voice-rate-slider" min="0.8" max="1.4" step="0.05" value="1.0" />
+        </div>
+
+        <div class="setting-item toggle-row">
+          <div>
+            <span class="setting-label">Sound Feedback Chimes</span>
+            <span class="setting-subtext">Earcons for mic listening and confirmation</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="audio-chimes-toggle" checked />
+            <span class="slider round"></span>
+          </label>
+        </div>
+
+        <button id="test-voice-btn" class="secondary-btn">Test Spoken Guidance</button>
+      </section>
+
+      <!-- Section 4: Walking Calibration -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">Walking Calibration</h3>
+        <div class="setting-item">
+          <div class="setting-label-wrap">
+            <label for="stride-slider">Stride Length</label>
+            <span id="stride-val" class="setting-val">0.70 m</span>
+          </div>
+          <input type="range" id="stride-slider" min="0.5" max="1.0" step="0.02" value="0.70" />
+          <span class="setting-subtext">Used for step-counted dead reckoning indoors</span>
+        </div>
+      </section>
+
+      <!-- Section 5: Obstacle Detection -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">Hazard Detection</h3>
+        <div class="setting-item toggle-row">
+          <div>
+            <span class="setting-label">Real-Time Obstacle Warnings</span>
+            <span class="setting-subtext">Alerts for people, chairs, tables, and sofas</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="hazard-toggle" checked />
+            <span class="slider round"></span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Section 6: Spoken Voice Commands Reference -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">Voice Commands Guide</h3>
+        <p class="section-desc">Speak naturally anytime using the <strong>"Hey Nav"</strong> wake phrase, or tap the mic button:</p>
+        <div class="commands-grid">
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, take me to [place]"</span>
+            <span class="cmd-desc">Routes to destination</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, where is [place]"</span>
+            <span class="cmd-desc">Finds room or amenity</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, repeat"</span>
+            <span class="cmd-desc">Replays last guidance</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, where am I"</span>
+            <span class="cmd-desc">Reports current leg & distance</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, switch floor"</span>
+            <span class="cmd-desc">Cycles between venues</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, stop"</span>
+            <span class="cmd-desc">Cancels current route</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, help"</span>
+            <span class="cmd-desc">Spoken list of commands</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<!-- TensorFlow.js + COCO-SSD for on-device obstacle detection -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.20.0/tf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/coco-ssd/2.2.3/coco-ssd.min.js"></script>
+
+<script src="js/venue-graph.js"></script>
+<script src="js/venues/sjt-7th-floor.js"></script>
+<script src="js/venues/hblock-3rd-floor.js"></script>
+<script src="js/localization.js"></script>
+<script src="js/venues/sjt-7th-floor.fingerprints.js"></script>
+<script src="js/venues/hblock-3rd-floor.fingerprints.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/ar.js"></script>
+<script src="js/hazards.js"></script>
+<script src="js/app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js').then((reg) => {
+        reg.update();
+      }).catch(console.warn);
+    });
+  }
+</script>
+</body>
+</html>
