@@ -46,6 +46,13 @@
       "type": "image/png",
       "form_factor": "narrow",
       "label": "Turn-by-turn voice guidance with an AR ground path overlay"
+    },
+    {
+      "src": "screenshots/05-wide.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Turn-by-turn voice guidance with an AR ground path overlay"
     }
   ]
 }
