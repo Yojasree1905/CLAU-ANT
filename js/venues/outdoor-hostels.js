@@ -48,23 +48,30 @@
 
   // Paste the output of the in-app "Export calibration" button here.
   // Format: { nodeId: { lat: <number>, lon: <number> }, ... }
-  // Calibrated on-site — verified against the sketched relative layout
-  // before committing (e.g. J and G main entrances are ~7m apart here,
-  // matching the short direct walkway shown connecting them).
+  // Calibrated on-site over TWO independent walks, combined here as an
+  // accuracy-weighted average (same method the in-app calibrator uses to
+  // combine multiple GPS samples). Most points agreed within ~10m across
+  // both walks; four moved more than that between passes
+  // (hostel_j, convenience_store_north, j_side_lift_entrance,
+  // bicycle_parking) — still usable (tens of meters, not hundreds), but
+  // worth a third confirming walk if there's time before the real demo.
+  // Verified against the sketched relative layout before committing:
+  // J and G main entrances land ~7-8m apart here, matching the short
+  // direct walkway shown connecting them.
   const CALIBRATED_COORDS = {
-    hostel_g: { lat: 12.9681554, lon: 79.1593860 }, // accuracy ~10m, 5 samples
-    j_main_entrance: { lat: 12.9682181, lon: 79.1594222 }, // accuracy ~13m, 5 samples
-    g_side_entrance: { lat: 12.9680115, lon: 79.1594173 }, // accuracy ~7m, 5 samples
-    g_main_entrance: { lat: 12.9682451, lon: 79.1594796 }, // accuracy ~14m, 5 samples
-    hostel_j: { lat: 12.9683771, lon: 79.1594841 }, // accuracy ~8m, 5 samples
-    convenience_store_north: { lat: 12.9677442, lon: 79.1596394 }, // accuracy ~14m, 5 samples
-    hostel_h: { lat: 12.9679906, lon: 79.1594173 }, // accuracy ~19m, 5 samples
-    j_side_lift_entrance: { lat: 12.9679915, lon: 79.1593436 }, // accuracy ~7m, 5 samples
-    guest_house: { lat: 12.9678287, lon: 79.1593953 }, // accuracy ~15m, 5 samples
-    convenience_store_south: { lat: 12.9678412, lon: 79.1595412 }, // accuracy ~33m, 5 samples
-    bicycle_parking: { lat: 12.9679155, lon: 79.1598049 }, // accuracy ~6m, 5 samples
-    main_gate: { lat: 12.9683245, lon: 79.1594908 }, // accuracy ~9m, 5 samples
-    mess_entrance: { lat: 12.9677146, lon: 79.1596414 }, // accuracy ~8m, 5 samples
+    hostel_g: { lat: 12.9681973, lon: 79.1594158 },
+    j_main_entrance: { lat: 12.9681831, lon: 79.1594289 },
+    g_side_entrance: { lat: 12.9680066, lon: 79.1593950 },
+    g_main_entrance: { lat: 12.9682450, lon: 79.1594590 },
+    hostel_j: { lat: 12.9683079, lon: 79.1594677 }, // walks disagreed by ~27m -- worth reconfirming
+    convenience_store_north: { lat: 12.9679250, lon: 79.1595513 }, // walks disagreed by ~57m -- worth reconfirming
+    hostel_h: { lat: 12.9679819, lon: 79.1594250 },
+    j_side_lift_entrance: { lat: 12.9679392, lon: 79.1593153 }, // walks disagreed by ~25m -- worth reconfirming
+    guest_house: { lat: 12.9678372, lon: 79.1593887 },
+    convenience_store_south: { lat: 12.9677885, lon: 79.1595763 },
+    bicycle_parking: { lat: 12.9678684, lon: 79.1597562 }, // walks disagreed by ~20m -- borderline, ok
+    main_gate: { lat: 12.9683405, lon: 79.1595167 },
+    mess_entrance: { lat: 12.9677325, lon: 79.1596211 },
   };
 
   const NODES = [
