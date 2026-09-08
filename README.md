@@ -255,6 +255,46 @@ obstacle. This is a simple visible-in-frame count, not a calibrated
 traffic-engineering metric — it answers "does it look busy right now,"
 which is what a pedestrian actually needs.
 
+## Outlining AR — visual bounding boxes for detected hazards
+
+Detected people, vehicles, and obstacles now get a real-time outline
+drawn directly on the camera feed — not just a voice announcement — color
+coded by urgency (red = critical/close, amber = near, green = further
+away), with a label chip naming what was detected. This is what the AR
+literature calls "Outlining AR": drawing a virtual outline aligned to a
+real detected object's position, the same category used in automotive
+obstacle-marking systems.
+
+This uses the exact bounding boxes COCO-SSD already computes for hazard
+detection (`hazards.js`'s `onDetections` callback) — no new detection
+work, just finally rendering data that existed already. The one non-
+trivial part was correctly mapping the detector's native video-pixel
+coordinates onto the canvas: the camera feed is displayed with CSS
+`object-fit: cover`, meaning it's scaled up and center-cropped to fill
+the screen rather than shown at its native resolution, so a naive 1:1
+coordinate mapping would misplace every box. I verified the mapping
+directly (a point at the exact center of the video correctly lands at
+the exact center of the canvas) and end-to-end in a real running browser
+via Playwright (fed fake detections, confirmed the boxes render in the
+right place with no console errors) before considering this done.
+
+## Why Location-based AR, not image-recognition AR
+
+Prompted by reference material on AR types, worth stating plainly why
+this app is built the way it is: it's **Location-based AR** (GPS +
+compass + accelerometer driving the overlay), not Markerless/image-
+recognition AR (camera visually recognizing *where* it is) and not Marker
+AR (removed — see "QR" history in the codebase). This isn't an arbitrary
+choice — it's what actually held up under testing. Two independent rounds
+of testing image-based place recognition against this project's real
+photos and video (documented above and in `localization.js`) found it
+unreliable enough to actively mislead rather than help. Location-based AR
+doesn't have that failure mode: GPS either has a fix or it doesn't, and
+never confidently reports the wrong building. The one thing image
+recognition *is* reliably good for here — detecting an object's presence
+and rough position, not recognizing which place this is — is exactly what
+the hazard detection and Outlining AR above already do.
+
 ## Venues included
 
 | Venue | Destinations it knows |

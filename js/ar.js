@@ -137,6 +137,20 @@ class ArOverlay {
     this.bubbleText = null;
   }
 
+  /**
+   * "Outlining AR" — live bounding boxes drawn around whatever the object
+   * detector currently sees (people, vehicles, furniture), not just a
+   * voice announcement for the single nearest one. `boxes` uses native
+   * video pixel coordinates; videoWidth/videoHeight are the video
+   * element's actual resolution, needed to correctly map onto the canvas
+   * given the video is displayed with CSS `object-fit: cover` (scaled up
+   * and center-cropped to fill the screen, not shown at native size).
+   */
+  setDetectedObjects(boxes, videoWidth, videoHeight) {
+    this.detectedObjects = boxes || [];
+    this.detectedVideoSize = { w: videoWidth, h: videoHeight };
+  }
+
   _raf() {
     this._draw();
     if (!this._reducedMotion) this._flowPhase = (this._flowPhase + 0.015) % 1;
@@ -164,6 +178,10 @@ class ArOverlay {
     if (this.bubbleText) {
       this._drawBubble(w, contentTop);
       contentTop += 34 + 14; // bubble height + gap
+    }
+
+    if (this.detectedObjects && this.detectedObjects.length) {
+      this._drawDetectionOutlines(w, h);
     }
 
     if (this.targetBearing === null) {
@@ -199,6 +217,65 @@ class ArOverlay {
     this._drawCurvingPath(heading, w, h, pathTop, bottomOffset);
     this._drawLabel(w, labelTop);
     ctx.restore();
+  }
+
+  /**
+   * Maps native video pixel coordinates onto canvas/screen coordinates,
+   * accounting for the video being displayed with CSS `object-fit: cover`
+   * — scaled up and center-cropped to fill the screen rather than shown
+   * at its native resolution. Standard "cover" mapping: scale by
+   * whichever axis needs to grow more to fully cover the container, then
+   * center the overflow.
+   */
+  _videoToCanvas(x, y, canvasW, canvasH) {
+    const { w: vw, h: vh } = this.detectedVideoSize;
+    const scale = Math.max(canvasW / vw, canvasH / vh);
+    const displayedW = vw * scale;
+    const displayedH = vh * scale;
+    const offsetX = (canvasW - displayedW) / 2;
+    const offsetY = (canvasH - displayedH) / 2;
+    return { x: x * scale + offsetX, y: y * scale + offsetY, scale };
+  }
+
+  _drawDetectionOutlines(w, h) {
+    const { ctx } = this;
+    const ZONE_STYLE = {
+      critical: { color: 'rgba(220, 60, 60, 0.95)', lineWidth: 3 },
+      near: { color: 'rgba(230, 170, 40, 0.9)', lineWidth: 2.5 },
+      mid: { color: 'rgba(110, 200, 140, 0.75)', lineWidth: 2 },
+      far: { color: 'rgba(180, 180, 180, 0.5)', lineWidth: 1.5 },
+    };
+
+    for (const obj of this.detectedObjects) {
+      const [bx, by, bw, bh] = obj.bbox;
+      const topLeft = this._videoToCanvas(bx, by, w, h);
+      const bottomRight = this._videoToCanvas(bx + bw, by + bh, w, h);
+      const boxW = bottomRight.x - topLeft.x;
+      const boxH = bottomRight.y - topLeft.y;
+      const style = ZONE_STYLE[obj.zone] || ZONE_STYLE.far;
+
+      ctx.save();
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.lineWidth;
+      ctx.strokeRect(topLeft.x, topLeft.y, boxW, boxH);
+
+      // Label chip above the box
+      ctx.font = '600 13px system-ui, sans-serif';
+      const labelText = obj.label;
+      const paddingX = 6;
+      const textW = ctx.measureText(labelText).width;
+      const chipW = textW + paddingX * 2;
+      const chipH = 20;
+      const chipY = Math.max(topLeft.y - chipH, 0);
+      ctx.fillStyle = style.color;
+      ctx.fillRect(topLeft.x, chipY, chipW, chipH);
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(labelText, topLeft.x + paddingX, chipY + chipH / 2 + 1);
+      ctx.textBaseline = 'alphabetic';
+      ctx.restore();
+    }
   }
 
   _drawBubble(w, topOffset) {

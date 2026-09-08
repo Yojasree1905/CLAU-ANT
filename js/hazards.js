@@ -89,10 +89,11 @@ function trafficLevelFor(avgCount) {
 }
 
 class HazardDetector {
-  constructor({ videoEl, onHazard, onTrafficUpdate }) {
+  constructor({ videoEl, onHazard, onTrafficUpdate, onDetections }) {
     this.videoEl = videoEl;
     this.onHazard = onHazard; // ({label, zone, guidance, priority}) => void
     this.onTrafficUpdate = onTrafficUpdate; // ({level, counts, totalVehicles}) => void
+    this.onDetections = onDetections; // (list, videoWidth, videoHeight) => void -- ALL boxes, for the visual outline overlay
     this.model = null;
     this.running = false;
     this._vehicleCountHistory = [];
@@ -128,6 +129,7 @@ class HazardDetector {
 
     let worst = null; // pick the single highest-priority hazard per tick
     const vehicleCounts = { car: 0, motorcycle: 0, bus: 0, bicycle: 0, truck: 0 };
+    const allBoxes = []; // every relevant detection this tick, for the visual outline overlay (not just the "worst" one)
 
     for (const p of predictions) {
       if (VEHICLE_CLASSES.has(p.class) && p.score >= 0.5) vehicleCounts[p.class]++;
@@ -137,6 +139,14 @@ class HazardDetector {
       const centerXRatio = (x + bw / 2) / w;
       const zone = zoneFor(heightRatio);
       const priority = ZONE_THRESHOLDS.findIndex((t) => t.zone === zone); // lower index = more urgent
+
+      allBoxes.push({
+        label: LABEL_SPOKEN_AS[p.class] || p.class,
+        zone,
+        bbox: p.bbox, // [x, y, width, height] in native video pixel coordinates
+        isVehicle: VEHICLE_CLASSES.has(p.class),
+      });
+
       if (zone === 'far') continue; // not worth interrupting the user yet
 
       const candidate = {
@@ -168,6 +178,7 @@ class HazardDetector {
     this.latestSnapshot = { hazard: worst, traffic: trafficInfo, timestamp: Date.now() };
     if (worst) this.onHazard(worst);
     if (this.onTrafficUpdate) this.onTrafficUpdate(trafficInfo);
+    if (this.onDetections) this.onDetections(allBoxes, w, h);
   }
 
   /**

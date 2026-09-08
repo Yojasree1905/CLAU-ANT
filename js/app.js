@@ -204,8 +204,12 @@ function init() {
     settings.hazardsEnabled = e.target.checked;
     try { localStorage.setItem('navassist_hazards', String(settings.hazardsEnabled)); } catch (_) {}
     if (hazards) {
-      if (settings.hazardsEnabled) hazards.start(4);
-      else hazards.stop();
+      if (settings.hazardsEnabled) {
+        hazards.start(4);
+      } else {
+        hazards.stop();
+        ar && ar.setDetectedObjects([], 0, 0); // clear stale outlines immediately, don't wait for a tick that won't come
+      }
     }
   });
 
@@ -518,7 +522,12 @@ async function startAssistant() {
   els.voiceHint.textContent = 'Say "Hey Nav" or tap mic to begin';
 
   if (camStream && settings.hazardsEnabled) {
-    hazards = new HazardDetector({ videoEl: els.video, onHazard: handleHazard, onTrafficUpdate: handleTrafficUpdate });
+    hazards = new HazardDetector({
+      videoEl: els.video,
+      onHazard: handleHazard,
+      onTrafficUpdate: handleTrafficUpdate,
+      onDetections: (boxes, vw, vh) => ar && ar.setDetectedObjects(boxes, vw, vh),
+    });
     setStatus('Loading hazard detector…');
     await hazards.load();
     hazards.start(4);
