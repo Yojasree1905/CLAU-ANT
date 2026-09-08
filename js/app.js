@@ -1063,10 +1063,25 @@ function handleGpsUpdate(fix) {
   }
 
   const isFinalPoint = route.pointIndex === route.points.length - 1;
-  const [targetLat, targetLon] = route.points[route.pointIndex];
-  const distance = haversineDistance(fix.lat, fix.lon, targetLat, targetLon);
-  const bearing = initialBearing(fix.lat, fix.lon, targetLat, targetLon);
-  ar && ar.setTarget(bearing, distance, isFinalPoint ? route.destLabel : 'next point');
+
+  // Build a short lookahead (up to 4 upcoming points, all bearings/
+  // distances measured from the CURRENT position) so the AR overlay can
+  // trace a curve matching the real route shape, not just point at the
+  // single nearest vertex. The label's distance still reflects only the
+  // nearest point, same as before — the extra points are for the visual.
+  const LOOKAHEAD = 4;
+  const lookaheadEnd = Math.min(route.pointIndex + LOOKAHEAD, route.points.length);
+  const aheadPoints = [];
+  for (let i = route.pointIndex; i < lookaheadEnd; i++) {
+    const [plat, plon] = route.points[i];
+    aheadPoints.push({
+      bearing: initialBearing(fix.lat, fix.lon, plat, plon),
+      distance: haversineDistance(fix.lat, fix.lon, plat, plon),
+    });
+  }
+
+  const distance = aheadPoints[0].distance;
+  ar && ar.setPath(aheadPoints, distance, isFinalPoint ? route.destLabel : 'next point');
 
   if (isFinalPoint && distance <= arrivalRadius) {
     state.phase = 'arrived';

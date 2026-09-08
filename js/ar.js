@@ -105,13 +105,28 @@ class ArOverlay {
   }
 
   setTarget(bearingDeg, distanceMeters, label) {
-    this.targetBearing = bearingDeg;
-    this.distanceRemaining = distanceMeters;
+    this.setPath([{ bearing: bearingDeg, distance: distanceMeters }], distanceMeters, label);
+  }
+
+  /**
+   * Multi-point version: points is an array of {bearing, distance} pairs
+   * (absolute compass bearing in degrees, distance in meters), nearest
+   * first, for several upcoming stops along the actual route — not just
+   * the very next one. This is what makes the rendered path curve like
+   * the real road instead of always drawing a single straight-ish shape:
+   * each point gets projected to screen space based on its own bearing
+   * and distance, and a smooth curve is traced through all of them.
+   */
+  setPath(points, totalDistanceRemaining, label) {
+    this.pathPoints = points && points.length ? points : null;
+    this.targetBearing = this.pathPoints ? this.pathPoints[0].bearing : null;
+    this.distanceRemaining = totalDistanceRemaining;
     this.destinationLabel = label;
   }
 
   clearTarget() {
     this.targetBearing = null;
+    this.pathPoints = null;
   }
 
   showBubble(text) {
@@ -162,7 +177,7 @@ class ArOverlay {
     }
 
     let rel = this.targetBearing - heading;
-    rel = ((rel + 540) % 360) - 180; // -180..180, 0 = straight ahead
+    rel = ((rel + 540) % 360) - 180; // -180..180, 0 = straight ahead; drives the turn-around check below
 
     const labelTop = contentTop;
     let pathTop = labelTop + 52 + 16; // label height + gap
@@ -171,9 +186,9 @@ class ArOverlay {
       pathTop += 26;
     }
 
-    // Beyond ~70deg the destination is essentially behind you — a curving
-    // ground path can't sensibly represent that, so show a turn-around
-    // badge instead of a stretched-out arrow.
+    // Beyond ~70deg the nearest point is essentially behind you — a
+    // curving ground path can't sensibly represent that, so show a
+    // turn-around badge instead of a stretched-out arrow.
     if (Math.abs(rel) > 70) {
       this._drawTurnAround(rel, w, h, pathTop, bottomOffset);
       this._drawLabel(w, labelTop);
@@ -181,7 +196,7 @@ class ArOverlay {
       return;
     }
 
-    this._drawGroundPath(rel, w, h, pathTop, bottomOffset);
+    this._drawCurvingPath(heading, w, h, pathTop, bottomOffset);
     this._drawLabel(w, labelTop);
     ctx.restore();
   }
@@ -219,31 +234,56 @@ class ArOverlay {
     ctx.restore();
   }
 
-  _drawGroundPath(rel, w, h, pathTop, bottomOffset) {
+  /**
+   * Projects each upcoming route point into screen space based on its own
+   * bearing (relative to current heading) and distance, then traces a
+   * smooth curve through all of them — this is what makes the path bend
+   * like the real road shape instead of a single left/right lean. Nearer
+   * points sit low and wide on screen; farther points sit higher and
+   * narrower, approximating perspective without real depth data.
+   */
+  _drawCurvingPath(heading, w, h, pathTop, bottomOffset) {
     const { ctx } = this;
-    const t = rel / 70; // -1..1
-    const urgency = Math.min(Math.abs(rel) / 70, 1);
+    const points = this.pathPoints;
+    const bottomY = h - bottomOffset - 20;
+    const topY = pathTop + (bottomY - pathTop) * 0.15;
+    const bottomHalfW = w * 0.24;
+    const topHalfW = w * 0.05;
+
+    const maxDist = Math.max(...points.map((p) => p.distance), 1);
+    const projected = points.map((p) => {
+      let rel = p.bearing - heading;
+      rel = ((rel + 540) % 360) - 180;
+      const clampedRel = Math.max(-85, Math.min(85, rel));
+      // sqrt compresses farther points so they don't all crowd near the
+      // top when the lookahead spans a wide range of distances.
+      const t = Math.min(1, Math.sqrt(p.distance / maxDist));
+      return { rel: clampedRel, t };
+    });
+
+    const screenPoint = ({ rel, t }) => {
+      const y = bottomY - t * (bottomY - topY);
+      const lateralSpread = w * 0.3 * (1 - t * 0.25);
+      const x = w / 2 + (rel / 85) * lateralSpread;
+      const halfWidth = bottomHalfW * (1 - t) + topHalfW * t;
+      return { x, y, halfWidth };
+    };
+
+    // The user's own position anchors the bottom of the path, always
+    // dead-center — the path always starts "at your feet."
+    const screenPts = [{ x: w / 2, y: bottomY, halfWidth: bottomHalfW }, ...projected.map(screenPoint)];
+
+    const urgency = Math.min(Math.abs(projected[0].rel) / 70, 1);
     const r = Math.round(60 + urgency * 190);
     const g = Math.round(200 - urgency * 60);
     const pathColor = `rgb(${r}, ${g}, 90)`;
 
-    // Ground path: a curved trapezoid from low in the viewport up toward a
-    // vanishing point, bending toward the turn direction.
-    const bottomY = h - bottomOffset - 20;
-    const topY = pathTop + (bottomY - pathTop) * 0.15;
-    const bottomHalfW = w * 0.24;
-    const topHalfW = w * 0.045;
-    const centerX = w / 2;
-    const topCenterX = centerX + t * w * 0.3;
-    const controlY = (bottomY + topY) / 2;
-    const controlShift = t * w * 0.22;
-
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(centerX - bottomHalfW, bottomY);
-    ctx.quadraticCurveTo(centerX - bottomHalfW * 0.4 + controlShift, controlY, topCenterX - topHalfW, topY);
-    ctx.lineTo(topCenterX + topHalfW, topY);
-    ctx.quadraticCurveTo(centerX + bottomHalfW * 0.4 + controlShift, controlY, centerX + bottomHalfW, bottomY);
+    const leftEdge = screenPts.map((p) => ({ x: p.x - p.halfWidth, y: p.y }));
+    const rightEdge = screenPts.map((p) => ({ x: p.x + p.halfWidth, y: p.y })).reverse();
+    this._tracePolylineSmooth(ctx, leftEdge, false);
+    this._tracePolylineSmooth(ctx, rightEdge, true);
     ctx.closePath();
 
     const grad = ctx.createLinearGradient(0, bottomY, 0, topY);
@@ -259,28 +299,60 @@ class ArOverlay {
     ctx.restore();
 
     // Chevrons flowing along the path's centerline, each pointing along
-    // its local tangent so they visually "aim" around the curve.
+    // its local tangent so they visually "aim" around every curve, not
+    // just a single overall lean.
+    const centerPts = screenPts.map((p) => ({ x: p.x, y: p.y }));
     const chevronCount = 4;
     for (let i = 0; i < chevronCount; i++) {
       const p = (i / chevronCount + this._flowPhase) % 1;
-      const pt = this._pointOnPath(p, centerX, bottomY, topCenterX, topY, controlShift, controlY);
+      const pt = this._pointOnPolyline(centerPts, p);
       const localWidth = bottomHalfW * (1 - p) + topHalfW * p;
       this._drawChevron(pt.x, pt.y, pt.angle, localWidth * 0.9, pathColor);
     }
 
-    // Arrowhead at the top of the path, pointing further into the turn.
-    const tip = this._pointOnPath(1, centerX, bottomY, topCenterX, topY, controlShift, controlY);
-    this._drawChevron(topCenterX, topY - 6, tip.angle, topHalfW * 2.2, pathColor, 1.4);
+    const tip = this._pointOnPolyline(centerPts, 1);
+    this._drawChevron(tip.x, tip.y - 6, tip.angle, topHalfW * 2.2, pathColor, 1.4);
   }
 
-  /** Point + tangent angle at parameter p (0=bottom, 1=top) along the quadratic curve used for the path's centerline. */
-  _pointOnPath(p, x0, y0, x1, y1, controlShift, controlY) {
-    const cx = (x0 + x1) / 2 + controlShift;
-    const cy = controlY;
-    const x = (1 - p) * (1 - p) * x0 + 2 * (1 - p) * p * cx + p * p * x1;
-    const y = (1 - p) * (1 - p) * y0 + 2 * (1 - p) * p * cy + p * p * y1;
-    const dx = 2 * (1 - p) * (cx - x0) + 2 * p * (x1 - cx);
-    const dy = 2 * (1 - p) * (cy - y0) + 2 * p * (y1 - cy);
+  /**
+   * Traces a smooth curve through a polyline's points using quadratic
+   * curves through consecutive midpoints — a standard, simple technique
+   * for a smooth line through arbitrary control points without needing a
+   * full spline implementation. `continuePath` appends to the current
+   * canvas path (via lineTo for the first point) instead of starting a
+   * new subpath, so a left edge and a reversed right edge can be traced
+   * back-to-back into one closed shape.
+   */
+  _tracePolylineSmooth(ctx, points, continuePath) {
+    if (points.length === 0) return;
+    if (continuePath) ctx.lineTo(points[0].x, points[0].y);
+    else ctx.moveTo(points[0].x, points[0].y);
+    if (points.length === 1) return;
+    if (points.length === 2) {
+      ctx.lineTo(points[1].x, points[1].y);
+      return;
+    }
+    for (let i = 1; i < points.length - 1; i++) {
+      const midX = (points[i].x + points[i + 1].x) / 2;
+      const midY = (points[i].y + points[i + 1].y) / 2;
+      ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+    }
+    const last = points[points.length - 1];
+    ctx.lineTo(last.x, last.y);
+  }
+
+  /** Point + tangent angle at parameter p (0=first, 1=last) along a polyline, interpolating evenly by segment index. */
+  _pointOnPolyline(points, p) {
+    const n = points.length;
+    if (n === 1) return { x: points[0].x, y: points[0].y, angle: 0 };
+    const scaled = Math.max(0, Math.min(1, p)) * (n - 1);
+    const i0 = Math.min(Math.floor(scaled), n - 2);
+    const i1 = i0 + 1;
+    const localT = scaled - i0;
+    const x = points[i0].x + (points[i1].x - points[i0].x) * localT;
+    const y = points[i0].y + (points[i1].y - points[i0].y) * localT;
+    const dx = points[i1].x - points[i0].x;
+    const dy = points[i1].y - points[i0].y;
     return { x, y, angle: Math.atan2(dx, -dy) };
   }
 

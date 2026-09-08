@@ -70,15 +70,31 @@ visual matching is needed or run.
 
 ## AR ground path
 
-The camera overlay draws a tapered path low in the frame that curves left
-or right toward your next turn, with chevrons flowing along it, instead of
-a floating rotating arrow badge. Beyond about 70° off — meaning the
-destination is essentially behind you — it switches to a clear "turn
-around" loop icon instead of stretching the path into something confusing.
-This is still a heading-based illusion (uses the phone's compass), not
-true floor-locked AR — see the comment at the top of `js/ar.js` for why
-real plane-tracked AR (WebXR) was deliberately not used: it only works on
-ARCore Android phones in Chrome, not iPhones.
+The camera overlay draws a tapered path low in the frame, with chevrons
+flowing along it, instead of a floating rotating arrow badge. Outdoors,
+where a route has multiple points, the path now genuinely **curves
+through a short lookahead** (up to 4 upcoming route points, each
+projected independently by its own bearing/distance from your current
+position) rather than only ever leaning in one direction — a real winding
+footpath renders as a real S-curve, not a single left/right tilt. I
+verified this with rendered test images (a deliberate S-curve input
+produces a visible S-curve output) and a full simulated walk through a
+6-point route, checking that the lookahead shrinks gracefully as the
+route nears its end. Indoors, and for the very last stretch of any route,
+it gracefully falls back to the original single-point shape — same
+rendering code path either way. Beyond about 70° off on the nearest point
+— meaning it's essentially behind you — it switches to a clear "turn
+around" loop icon instead of stretching the path into something
+confusing. This is still a heading-based illusion (uses the phone's
+compass), not true floor-locked AR — see the comment at the top of
+`js/ar.js` for why real plane-tracked AR (WebXR) was deliberately not
+used: it only works on ARCore Android phones in Chrome, not iPhones. Full
+camera-based automatic place recognition (point the camera at a building
+and have it recognize which one, with no GPS) was requested but isn't
+buildable here — see "Why the camera can't 'just recognize' a block"
+below for the honest reasoning; the GPS system above already delivers the
+same practical outcome (the arrow updates and points correctly
+automatically as you walk) without needing that.
 
 **Real-device finding**: on-device screenshots at SJT showed the path
 never rendering at all — not misdirected, just never appearing. The
@@ -93,6 +109,26 @@ arrived, with a small on-screen note ("No compass signal — showing
 straight-ahead") so it's clear when this fallback is active. It
 transparently upgrades to true compass-relative rendering the moment a
 real reading does show up.
+
+## Why the camera can't "just recognize" a block
+
+A request came in for the camera to automatically recognize its
+surroundings from a walkthrough video and point to the right block, with
+no GPS involved. Worth explaining clearly why that's not in this build:
+"training" real visual place recognition means gradient descent over
+thousands of labeled images on GPU hardware — production systems like
+Google Live View are trained on millions of geotagged street-level
+photos. Neither the training infrastructure nor that scale of data exists
+here. I checked the actual walkthrough video for embedded GPS metadata
+first (there was none — WhatsApp strips it), and it's also filmed at
+night, which is close to the hardest lighting condition for any
+lightweight visual matching. The indoor color-fingerprint hint elsewhere
+in this app (see "Where are you starting from?") was already shown to be
+unreliable on easier daytime scenes — a harder night outdoor version
+wouldn't be more reliable. The GPS-driven system above delivers the
+actual behavior that was being asked for (the arrow automatically finds
+and points to the right block as you walk, no manual input) — it just
+does it via GPS instead of a camera recognizing the scene.
 
 ## Two sensor-dependent features can silently fail — here's the safety net
 
