@@ -27,6 +27,7 @@ class VoiceIO {
     onWakeWord,
     onLocationSet,
     onNextRequested,
+    onCalibrateRequested,
   } = {}) {
     this.onDestinationRequest = onDestinationRequest;
     this.onStop = onStop;
@@ -38,6 +39,7 @@ class VoiceIO {
     this.onWakeWord = onWakeWord;
     this.onLocationSet = onLocationSet; // (placePhrase) => void — "I'm at the lift"
     this.onNextRequested = onNextRequested; // () => void — manual leg-advance fallback
+    this.onCalibrateRequested = onCalibrateRequested; // () => void — open outdoor calibration panel
 
     this.synth = window.speechSynthesis;
     this.lastSpokenAt = new Map();
@@ -372,6 +374,13 @@ class VoiceIO {
     if (/\b(next step|next leg|skip step|skip|i'?m there|i've arrived|move on|advance)\b/.test(cleanText)) {
       this.playChime('success');
       this.onNextRequested && this.onNextRequested();
+      return;
+    }
+
+    // 3d. "Calibrate waypoints" — opens the outdoor calibration panel directly.
+    if (/\b(calibrate|calibration)\b.*\b(waypoint|point|location)s?\b|calibrate waypoints/.test(cleanText)) {
+      this.playChime('success');
+      this.onCalibrateRequested && this.onCalibrateRequested();
       return;
     }
 

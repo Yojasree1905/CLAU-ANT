@@ -144,18 +144,69 @@ I" while navigating now also reports whether footsteps or a compass signal
 have been detected recently, so you don't have to infer sensor health from
 symptoms the way this round of testing had to.
 
+## Outdoor navigation (GPS) — Ladies Hostel G / H / J
+
+A third venue, "Outdoor — Hostel Paths," covers all six directions between
+the three hostel blocks (G↔H, G↔J, H↔J). It works completely differently
+from the two indoor venues, on purpose:
+
+**No coordinate is ever guessed.** Every outdoor waypoint (`js/venues/
+outdoor-hostels.js`) starts with `lat`/`lon` set to `null` and *stays*
+`null` until someone physically stands there and captures a real GPS
+reading. I tested this directly: with zero waypoints calibrated,
+`shortestPath()` returns `null` rather than routing through invented
+coordinates — confirmed with a script before this shipped. For a tool
+guiding someone who can't see the path, a wrong outdoor coordinate is a
+safety issue, not a rounding error, so there's no fallback here the way
+there is for the indoor compass/step-counting issues above.
+
+**How to calibrate it**: open Settings → Outdoor Calibration (or say "hey
+nav calibrate waypoints") while on the outdoor venue. Walk to each of the
+12 waypoints listed, tap **Capture here** (it averages 5 GPS readings over
+a few seconds, weighted toward the more accurate ones, and shows a
+warning if accuracy is poor), and its status flips to ✅. When done, tap
+**Export calibration** and paste the result into the `CALIBRATED_COORDS`
+object at the top of `js/venues/outdoor-hostels.js` — that's what makes it
+permanent for everyone, the same pattern as the QR sticker workflow.
+
+**The 9 via-points between entrances are a *shape* guess, not a coordinate
+guess** — I don't know if the real path bends twice or five times between
+any two hostels. Add or remove waypoints in that file to match the actual
+path once you've walked it; nothing about the calibration tool requires
+exactly this skeleton.
+
+**Once calibrated, navigation is GPS-driven, not step-counted.** This is a
+meaningful improvement over the indoor approach: bearing and remaining
+distance are recomputed from your actual live position on every GPS
+update (roughly once a second), so there's no accumulating drift and
+nothing to get permanently stuck the way indoor step-counting could
+(see above) — "arrival" is real proximity to the waypoint's calibrated
+coordinates, scaled to the phone's reported GPS accuracy. The AR ground
+path, turn-by-turn voice, and hazard detection all reuse the exact same
+code as indoor; only the position source changes.
+
+I verified the full loop end-to-end with a simulated walk: calibrate 5
+waypoints along a straight line → route between them → feed in sequential
+GPS fixes approximating an actual walk → correct turn-by-turn distances
+throughout → correct arrival. The haversine distance and bearing formulas
+were checked against independent references (cardinal-direction test
+cases, and the well-documented ~344km London-to-Paris distance) before
+being trusted for any of this.
+
 ## Venues included
 
 | Venue | Destinations it knows |
 |---|---|
 | **SJT — 7th floor corner** | staircase, entrance lobby, rooms 711/712, faculty cabins, water cooler, women's washroom (714), room 715, open corridor, far end of corridor |
 | **H Block — 3rd floor** | lift, staircase, water cooler, washroom, main corridor / walking area, storage room, common room (sofa), corridor turn, dormitory rooms, balcony (drying area) |
+| **Outdoor — Hostel Paths** | Ladies Hostel G, H, J, and 9 path waypoints between them — see "Outdoor navigation" above; requires on-site calibration before it can route anywhere |
 
-Both venues' data live in `js/venues/*.js` — same format, so adding a third
-floor later is just a new file plus one `registerVenue()` call. The raw
-photos and walkthrough videos for both are kept in `dataset/` for
-reference and for re-deriving the map (or the visual fingerprints — see
-`scripts/precompute_fingerprints.py`) if you recalibrate.
+Indoor venues' data live in `js/venues/*.js` in the same format, so adding
+a fourth floor later is just a new file plus one `registerVenue()` call.
+The raw photos and walkthrough videos for the two indoor venues are kept
+in `dataset/` for reference and for re-deriving the map (or the visual
+fingerprints — see `scripts/precompute_fingerprints.py`) if you
+recalibrate.
 
 ## What's new for H Block specifically
 
@@ -219,6 +270,7 @@ tap it from **Show destination list**.
 | Ambient visual place matching (soft hint + bubble, no sticker in view) | Working, but low-confidence by design — see "Where are you starting from?" above for why it's deliberately conservative |
 | AR ground-path overlay, curves toward turns | Working, with a straight-ahead fallback confirmed necessary on real hardware — see "AR ground path" above |
 | Manual "Next" advance (voice or button) as a step-counting safety net | Working — added after real-device testing showed step-counting can silently never fire |
+| Outdoor GPS navigation (Ladies Hostel G/H/J) | Working, but requires on-site calibration before it can route anywhere — no coordinate is ever guessed, see "Outdoor navigation" above |
 | Step-counted progress along a route (dead reckoning) | Working, adjustable stride length in Settings |
 | Person / chair / table / sofa hazard warnings with left-right correction | Working (TensorFlow.js COCO-SSD) |
 | "Steps ahead" detection | **Heuristic placeholder** — edge-density guess, will false-positive on plain tile floors. Swap in a real geometric detector for production use. |

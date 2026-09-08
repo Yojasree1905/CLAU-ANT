@@ -31,6 +31,8 @@ const state = {
 
 let localizer = null; // set once the camera is running (see startAssistant)
 let qrScanner = null; // set once the camera is running (see startAssistant)
+let gpsTracker = null; // outdoor live position tracking (see startAssistant)
+let waypointCalibrator = null; // outdoor waypoint calibration tool (see startAssistant)
 
 const settings = {
   strideLengthM: 0.70,
@@ -97,6 +99,10 @@ function init() {
   els.audioChimesToggle = document.getElementById('audio-chimes-toggle');
   els.hazardToggle = document.getElementById('hazard-toggle');
   els.testVoiceBtn = document.getElementById('test-voice-btn');
+  els.calibrationSection = document.getElementById('calibration-section');
+  els.calibrationList = document.getElementById('calibration-list');
+  els.exportCalibrationBtn = document.getElementById('export-calibration-btn');
+  els.calibrationExportOutput = document.getElementById('calibration-export-output');
 
   // Default to first venue
   const venueIds = Object.keys(window.VENUES);
@@ -114,6 +120,7 @@ function init() {
     onWakeWord: handleWakeWordDetected,
     onLocationSet: handleLocationSet,
     onNextRequested: forceAdvanceLeg,
+    onCalibrateRequested: openCalibrationPanel,
   });
   voice.rate = settings.voiceRate;
   voice.chimesEnabled = settings.audioChimes;
@@ -122,6 +129,7 @@ function init() {
   syncSettingsUI();
   renderVenuePicker();
   renderDestinationList();
+  renderCalibrationSection();
   updateTopBadge();
 
   // Canvas setup
@@ -136,6 +144,7 @@ function init() {
   els.sidebarToggleBtn.addEventListener('click', () => toggleSidebar(true));
   els.sidebarCloseBtn.addEventListener('click', () => toggleSidebar(false));
   els.sidebarBackdrop.addEventListener('click', () => toggleSidebar(false));
+  els.exportCalibrationBtn.addEventListener('click', handleExportCalibration);
 
   // Keyboard accessibility (Escape closes sidebar)
   window.addEventListener('keydown', (e) => {
@@ -248,8 +257,10 @@ function switchVenue(venueId, { spoken = true } = {}) {
   state.lastAnnouncedLandmark = null;
   ar && ar.clearTarget();
   els.routeControls.classList.add('hidden');
+  stopGpsNavigation();
   renderVenuePicker();
   renderDestinationList();
+  renderCalibrationSection();
   updateTopBadge();
   const label = currentVenue().label;
   setStatus(`Switched to ${label}. Ready for voice requests.`);
@@ -321,6 +332,112 @@ function filterDestinationList(query) {
 }
 
 // ---------------------------------------------------------------------
+// Outdoor GPS Waypoint Calibration UI
+// ---------------------------------------------------------------------
+// The only place in this app where an outdoor coordinate is ever set.
+// Every value here comes from an actual navigator.geolocation reading
+// taken while physically standing at the waypoint — nothing here invents
+// or defaults a coordinate. See venue-graph.js and gps-nav.js headers.
+
+function openCalibrationPanel() {
+  if (!currentVenue().isOutdoor) {
+    voice.speak('Calibration is only needed for the outdoor venue. Say "switch floor" to get to it.', {
+      key: 'calibration-wrong-venue',
+    });
+    return;
+  }
+  toggleSidebar(true);
+  els.calibrationSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  voice.speak('Outdoor calibration is open. Walk to a waypoint and tap Capture, or say its name.', {
+    key: 'calibration-opened',
+    interrupt: true,
+  });
+}
+
+function renderCalibrationSection() {
+  const isOutdoor = currentVenue().isOutdoor;
+  els.calibrationSection.style.display = isOutdoor ? 'block' : 'none';
+  if (!isOutdoor) return;
+
+  const graph = currentVenue().graph;
+  els.calibrationList.innerHTML = '';
+  els.calibrationExportOutput.style.display = 'none';
+
+  for (const node of graph.nodes.values()) {
+    const calibrated = waypointCalibrator ? waypointCalibrator.isCalibrated(graph, node.id) : (node.lat !== null);
+    const li = document.createElement('li');
+    li.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.08);';
+    li.innerHTML = `
+      <span style="flex:1;">${calibrated ? '✅' : '⭕'} ${node.label}</span>
+      <button class="pill-action-btn calib-capture-btn" data-node-id="${node.id}" style="padding:6px 10px; font-size:0.8rem;">
+        ${calibrated ? 'Re-capture' : 'Capture here'}
+      </button>
+    `;
+    els.calibrationList.appendChild(li);
+  }
+
+  els.calibrationList.querySelectorAll('.calib-capture-btn').forEach((btn) => {
+    btn.addEventListener('click', () => captureWaypoint(btn.dataset.nodeId, btn));
+  });
+}
+
+async function captureWaypoint(nodeId, buttonEl) {
+  if (!waypointCalibrator) {
+    voice.speak('The assistant needs to be started first.', { key: 'calibration-not-ready' });
+    return;
+  }
+  const graph = currentVenue().graph;
+  const node = graph.nodes.get(nodeId);
+  if (!node) return;
+
+  const originalText = buttonEl.textContent;
+  buttonEl.disabled = true;
+
+  const result = await waypointCalibrator.captureHere({
+    samples: 5,
+    intervalMs: 700,
+    onProgress: (i, total) => {
+      buttonEl.textContent = `Capturing ${i}/${total}…`;
+    },
+  });
+
+  buttonEl.disabled = false;
+  buttonEl.textContent = originalText;
+
+  if (!result) {
+    voice.speak(`Couldn't get a GPS reading for ${node.label}. Make sure location access is allowed and try again outdoors.`, {
+      key: 'calibration-failed',
+    });
+    return;
+  }
+
+  waypointCalibrator.record(nodeId, result);
+  waypointCalibrator.applyToGraph(graph); // usable immediately this session
+  renderCalibrationSection();
+
+  const accuracyNote = result.accuracy > 15
+    ? ` GPS accuracy is only about ${Math.round(result.accuracy)} meters here — consider re-capturing in a more open spot.`
+    : '';
+  voice.speak(`Captured ${node.label}.${accuracyNote}`, { key: 'calibration-captured', interrupt: true });
+}
+
+function handleExportCalibration() {
+  if (!waypointCalibrator || Object.keys(waypointCalibrator.captured).length === 0) {
+    voice.speak('Nothing captured yet — walk to a waypoint and tap Capture first.', { key: 'export-empty' });
+    return;
+  }
+  const snippet = waypointCalibrator.exportSnippet();
+  els.calibrationExportOutput.value = snippet;
+  els.calibrationExportOutput.style.display = 'block';
+  els.calibrationExportOutput.focus();
+  els.calibrationExportOutput.select();
+  voice.speak('Calibration exported below. Copy it into the outdoor venue file to make it permanent.', {
+    key: 'export-done',
+    interrupt: true,
+  });
+}
+
+// ---------------------------------------------------------------------
 // Assistant Launch & Voice Button Interaction
 // ---------------------------------------------------------------------
 
@@ -361,6 +478,8 @@ async function startAssistant() {
   ar.start();
 
   window.addEventListener('devicemotion', onDeviceMotion);
+  gpsTracker = new GpsTracker();
+  waypointCalibrator = new WaypointCalibrator();
 
   voice.start();
   state.phase = 'idle';
@@ -661,6 +780,7 @@ function handleStopRequested() {
   ar && ar.clearTarget();
   els.routeControls.classList.add('hidden');
   els.subtitle.textContent = '';
+  stopGpsNavigation();
   voice.speak('Navigation stopped.', { key: 'stopped', interrupt: true });
   setStatus('Say "Hey Nav" or tap mic');
 }
@@ -736,6 +856,67 @@ function announceCurrentLeg() {
 
   voice.speak(msg, { key: `leg-${state.legIndex}`, interrupt: true, cooldownMs: 500 });
   els.subtitle.textContent = msg;
+
+  if (currentVenue().isOutdoor) startGpsNavigation();
+}
+
+// ---------------------------------------------------------------------
+// Outdoor GPS-driven navigation
+// ---------------------------------------------------------------------
+// Unlike indoor dead reckoning, outdoor progress is driven directly by
+// live position fixes rather than counted steps — there's no drift to
+// accumulate, and "have I arrived" is real proximity, not a guess. Bearing
+// and remaining distance are recomputed on every GPS update from the
+// user's actual current position to the next waypoint's calibrated
+// coordinates, not from the static node-to-node bearing the graph was
+// authored with (the user's real position during a leg is anywhere along
+// the path, not just at its endpoints).
+
+const GPS_ARRIVAL_BASE_M = 6; // baseline "close enough" radius
+let gpsNavActive = false;
+
+function startGpsNavigation() {
+  if (!gpsTracker || gpsNavActive) return;
+  gpsNavActive = true;
+  gpsTracker.start({ onUpdate: handleGpsUpdate, onError: handleGpsError });
+}
+
+function stopGpsNavigation() {
+  gpsNavActive = false;
+  gpsTracker && gpsTracker.stop();
+}
+
+function handleGpsUpdate(fix) {
+  if (!gpsNavActive || state.phase !== 'navigating' || !currentVenue().isOutdoor) return;
+  const leg = state.legs[state.legIndex];
+  if (!leg) return;
+  const targetNode = currentVenue().graph.nodes.get(leg.toId);
+  if (!targetNode || targetNode.lat === null || targetNode.lon === null) return; // shouldn't happen if shortestPath validated the route
+
+  const { haversineDistance, initialBearing } = window.__venueHelpers;
+  const distance = haversineDistance(fix.lat, fix.lon, targetNode.lat, targetNode.lon);
+  const bearing = initialBearing(fix.lat, fix.lon, targetNode.lat, targetNode.lon);
+  ar && ar.setTarget(bearing, distance, leg.toLabel);
+
+  // Arrival radius widens with reported GPS uncertainty — a tight 3m
+  // threshold on a phone reporting 15m accuracy would rarely ever fire.
+  const arrivalRadius = Math.max(GPS_ARRIVAL_BASE_M, (fix.accuracy || 0) * 0.6);
+  if (distance <= arrivalRadius) {
+    state.currentNodeId = leg.toId;
+    advanceLeg();
+  } else if (distance <= arrivalRadius * 2.5) {
+    voice.speak(`Almost there, about ${distance.toFixed(0)} meters.`, {
+      key: `outdoor-leg-${state.legIndex}-close`,
+      cooldownMs: 6000,
+    });
+  }
+}
+
+function handleGpsError(err) {
+  voice.speak(
+    "I can't get a GPS signal right now. Make sure location access is allowed and you're outdoors.",
+    { key: 'gps-error', cooldownMs: 15000 }
+  );
 }
 
 function advanceLeg() {
@@ -744,6 +925,7 @@ function advanceLeg() {
   if (state.legIndex >= state.legs.length) {
     state.phase = 'arrived';
     els.routeControls.classList.add('hidden');
+    stopGpsNavigation();
     const lastLabel = state.legs[state.legs.length - 1].toLabel;
     voice.speak(`You have arrived at ${lastLabel}.`, { key: 'arrived', interrupt: true });
     setStatus(`Arrived at ${lastLabel}`);
@@ -776,7 +958,7 @@ function forceAdvanceLeg() {
 
 function onDeviceMotion(e) {
   state.lastMotionEventAt = Date.now(); // diagnostic: proves devicemotion fires at all, even below the step threshold
-  if (state.phase !== 'navigating') return;
+  if (state.phase !== 'navigating' || currentVenue().isOutdoor) return; // outdoor uses live GPS instead, see handleGpsUpdate
   const a = e.accelerationIncludingGravity;
   if (!a) return;
   const mag = Math.sqrt((a.x || 0) ** 2 + (a.y || 0) ** 2 + (a.z || 0) ** 2);

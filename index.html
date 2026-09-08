@@ -182,6 +182,17 @@
         </div>
       </section>
 
+      <!-- Section: Outdoor GPS Waypoint Calibration -->
+      <section class="sidebar-section" id="calibration-section" style="display:none;">
+        <h3 class="section-heading">Outdoor Calibration</h3>
+        <p class="section-desc">
+          Walk to each waypoint below and tap Capture — coordinates are only ever set by physically standing there, never guessed.
+        </p>
+        <ul id="calibration-list" aria-label="Outdoor waypoints to calibrate"></ul>
+        <button id="export-calibration-btn" class="pill-action-btn" style="margin-top:10px;">Export calibration</button>
+        <textarea id="calibration-export-output" readonly style="display:none; width:100%; margin-top:8px; height:120px; font-family:monospace; font-size:12px;"></textarea>
+      </section>
+
       <!-- Section 6: Spoken Voice Commands Reference -->
       <section class="sidebar-section">
         <h3 class="section-heading">Voice Commands Guide</h3>
@@ -200,12 +211,20 @@
             <span class="cmd-desc">Replays last guidance</span>
           </div>
           <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, next"</span>
+            <span class="cmd-desc">Manually advance a step</span>
+          </div>
+          <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, where am I"</span>
             <span class="cmd-desc">Reports current leg & distance</span>
           </div>
           <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, switch floor"</span>
             <span class="cmd-desc">Cycles between venues</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, calibrate waypoints"</span>
+            <span class="cmd-desc">Opens outdoor calibration</span>
           </div>
           <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, stop"</span>
@@ -228,6 +247,8 @@
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="js/venue-graph.js"></script>
 <script src="js/venues/sjt-7th-floor.js"></script>
+<script src="js/venues/outdoor-hostels.js"></script>
+<script src="js/gps-nav.js"></script>
 <script src="js/venues/hblock-3rd-floor.js"></script>
 <script src="js/localization.js"></script>
 <script src="js/venues/sjt-7th-floor.fingerprints.js"></script>
