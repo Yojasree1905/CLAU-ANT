@@ -3,9 +3,10 @@
  * -----------------------------------------------------------------------
  * Real-time obstacle warnings from the live camera feed.
  *
- * Object hazards (person, chair, table) use TensorFlow.js's pretrained
- * COCO-SSD model, same family as the SSD-Lite MobileNetv2 detector
- * described in build-status.md. COCO has no "door" or "stairs" class, so:
+ * Object hazards (person, chair, table, and — for outdoor use — vehicles)
+ * use TensorFlow.js's pretrained COCO-SSD model, same family as the
+ * SSD-Lite MobileNetv2 detector described in build-status.md. COCO has no
+ * "door" or "stairs" class, so:
  *   - Door state comes from the venue graph (nodes flagged isDoor) — the
  *     app announces "there should be a door ahead" from map data, which
  *     is far more reliable than trying to vision-classify open/closed
@@ -20,18 +21,38 @@
  * already tuned in the existing app (build-status.md "Key calibration"):
  *   critical ~1.5m, near ~2.5m, mid ~4.5m, far ~8m — approximated here
  * from bounding-box height as a fraction of frame height, since a single
- * phone camera has no depth sensor.
+ * phone camera has no depth sensor. NOTE: these thresholds were tuned for
+ * indoor furniture at indoor distances — a car at typical road distance
+ * fills far less of the frame than a chair at the same "close" distance,
+ * so vehicle zone calls are a rougher approximation. Treat "critical" on
+ * a vehicle as "it's in frame and looks close," not a precise measurement.
+ *
+ * TRAFFIC AWARENESS (new): a rolling count of vehicle-class detections
+ * per tick, smoothed over a short window, classified into LOW/MEDIUM/HIGH.
+ * This is a simple heuristic count of what's visible in the camera's
+ * field of view, not a calibrated traffic-engineering metric — it answers
+ * "does it look busy right now," which is what the "how's the traffic"
+ * voice command needs, not more than that.
  * -----------------------------------------------------------------------
  */
 
-const HAZARD_LABELS = new Set(['person', 'chair', 'dining table', 'couch', 'bench']);
+const HAZARD_LABELS = new Set([
+  'person', 'chair', 'dining table', 'couch', 'bench',
+  'car', 'motorcycle', 'bus', 'bicycle', 'truck',
+]);
 const LABEL_SPOKEN_AS = {
   'dining table': 'table',
   person: 'person',
   chair: 'chair',
   couch: 'sofa',
   bench: 'bench',
+  car: 'car',
+  motorcycle: 'motorcycle',
+  bus: 'bus',
+  bicycle: 'bicycle',
+  truck: 'truck',
 };
+const VEHICLE_CLASSES = new Set(['car', 'motorcycle', 'bus', 'bicycle', 'truck']);
 
 // Bounding-box height / frame height thresholds, mapped to the app's
 // existing reaction-distance zones. Tune per-phone during calibration.
@@ -41,6 +62,11 @@ const ZONE_THRESHOLDS = [
   { zone: 'mid', minHeightRatio: 0.16 },
   { zone: 'far', minHeightRatio: 0.0 },
 ];
+
+// Rough, adjustable thresholds for "how busy does this look" — average
+// vehicle count in frame over the last TRAFFIC_WINDOW ticks.
+const TRAFFIC_WINDOW = 5;
+const TRAFFIC_THRESHOLDS = { low: 2, medium: 5 }; // < low -> LOW, < medium -> MEDIUM, else HIGH
 
 function zoneFor(heightRatio) {
   for (const t of ZONE_THRESHOLDS) {
@@ -56,12 +82,21 @@ function lateralGuidance(centerXRatio) {
   return 'stop, or step around carefully';
 }
 
+function trafficLevelFor(avgCount) {
+  if (avgCount < TRAFFIC_THRESHOLDS.low) return 'LOW';
+  if (avgCount < TRAFFIC_THRESHOLDS.medium) return 'MEDIUM';
+  return 'HIGH';
+}
+
 class HazardDetector {
-  constructor({ videoEl, onHazard }) {
+  constructor({ videoEl, onHazard, onTrafficUpdate }) {
     this.videoEl = videoEl;
     this.onHazard = onHazard; // ({label, zone, guidance, priority}) => void
+    this.onTrafficUpdate = onTrafficUpdate; // ({level, counts, totalVehicles}) => void
     this.model = null;
     this.running = false;
+    this._vehicleCountHistory = [];
+    this.latestSnapshot = { hazard: null, traffic: { level: 'LOW', counts: {}, totalVehicles: 0 }, timestamp: null };
   }
 
   async load() {
@@ -92,7 +127,10 @@ class HazardDetector {
     if (!w || !h) return;
 
     let worst = null; // pick the single highest-priority hazard per tick
+    const vehicleCounts = { car: 0, motorcycle: 0, bus: 0, bicycle: 0, truck: 0 };
+
     for (const p of predictions) {
+      if (VEHICLE_CLASSES.has(p.class) && p.score >= 0.5) vehicleCounts[p.class]++;
       if (!HAZARD_LABELS.has(p.class) || p.score < 0.55) continue;
       const [x, y, bw, bh] = p.bbox;
       const heightRatio = bh / h;
@@ -107,9 +145,19 @@ class HazardDetector {
         centerXRatio,
         guidance: zone === 'critical' ? lateralGuidance(centerXRatio) : null,
         priority,
+        isVehicle: VEHICLE_CLASSES.has(p.class),
       };
       if (!worst || candidate.priority < worst.priority) worst = candidate;
     }
+
+    // Traffic level: smoothed over a short rolling window so a single
+    // frame's miscount (or a car briefly leaving frame) doesn't flip the
+    // reported level back and forth.
+    const totalVehicles = Object.values(vehicleCounts).reduce((a, b) => a + b, 0);
+    this._vehicleCountHistory.push(totalVehicles);
+    if (this._vehicleCountHistory.length > TRAFFIC_WINDOW) this._vehicleCountHistory.shift();
+    const avgVehicles = this._vehicleCountHistory.reduce((a, b) => a + b, 0) / this._vehicleCountHistory.length;
+    const trafficInfo = { level: trafficLevelFor(avgVehicles), counts: vehicleCounts, totalVehicles };
 
     // Low-confidence "possible steps" hint from edge density (see file header).
     const stepsHint = this._stepsHeuristic();
@@ -117,7 +165,9 @@ class HazardDetector {
       worst = { label: 'steps', zone: 'near', guidance: null, priority: 1, isHeuristic: true };
     }
 
+    this.latestSnapshot = { hazard: worst, traffic: trafficInfo, timestamp: Date.now() };
     if (worst) this.onHazard(worst);
+    if (this.onTrafficUpdate) this.onTrafficUpdate(trafficInfo);
   }
 
   /**

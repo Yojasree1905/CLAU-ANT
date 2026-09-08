@@ -54,51 +54,19 @@ lift — say yes or tell me your real location"), but a human always
 confirms. It also runs in the background the whole time you're using the
 app to power the landmark bubble below.
 
-## QR location stickers — the actual reliable fix
-
-Prompted by AR research showing indoor systems typically calibrate
-position by scanning a marker at a known point ("Anchor Points"), the
-soft color-matching above now has a hard, unambiguous counterpart: a
-printed QR sticker at each landmark. Scanning one gives an exact position
-fix — no confidence thresholds, no confirmation round-trip.
-
-**Setup**: print `qr-codes/sjt7-print-sheet.pdf` and
-`qr-codes/hblock3-print-sheet.pdf` (or individual stickers from
-`qr-codes/<venue>/<place>.png`), cut them apart, and stick one up at each
-landmark. Each encodes `NAVASSIST:<venue>:<place>` and includes a
-human-readable label so you know which goes where even without scanning
-it. Re-run `python3 scripts/generate_qr_codes.py` if you rename or add
-nodes in `js/venues/*.js` — keep the `REFERENCES`-equivalent node list at
-the top of that script in sync with the venue files.
-
-**What it does**, once stickers are up:
-- During the "where are you?" check-in, pointing the camera at a sticker
-  resolves it instantly — faster and far more reliable than the voice/tap
-  fallback, which still works if you don't have a sticker handy.
-- Scanning the wrong building's sticker auto-switches the active floor.
-- **Mid-route drift correction**: if a sticker comes into view while
-  you're already navigating, the app silently re-anchors your position and
-  recalculates the remaining path from there — instead of trusting
-  accumulated step-counting, which drifts. This is very likely the actual
-  fix for "the arrows aren't working" reports: a wrong current-position
-  estimate produces a wrong bearing, which looks exactly like broken arrow
-  rendering even though the arrow math itself is fine.
-
-This doesn't replace the voice/tap location check-in — it's a faster, more
-reliable option layered on top, for anywhere you're willing to put up a
-sticker.
-
 ## The "you're near X" bubble
 
 Per the request that identifying *any* recognized place — not just your
 destination — should surface something on screen: the same visual matcher
-runs continuously (every 2.5s) while the assistant is active. QR stickers
-are checked first and are authoritative — spotting one shows "You're at:
-[place]" with full confidence and no wording hedge. Without a sticker in
-view, it falls back to the soft color-matching hint from the section
-above, worded "You might be near..." on purpose, and stays silent rather
-than guess when the vision signal is ambiguous, which is often in this
-building.
+runs continuously (every 2.5s) while the assistant is active indoors. When
+it recognizes a landmark with a confident, clearly-separated match, a
+small blue bubble appears near the top of the screen ("You might be near:
+the water cooler") and it's announced once by voice. Given the matching
+limitations above, treat this as a friendly hint, not a guarantee — it's
+intentionally worded "might be," and it stays silent rather than guess
+when the vision signal is ambiguous, which is often in this building.
+This is indoor-only; outdoors, GPS answers "where am I" directly, so no
+visual matching is needed or run.
 
 ## AR ground path
 
@@ -144,54 +112,112 @@ I" while navigating now also reports whether footsteps or a compass signal
 have been detected recently, so you don't have to infer sensor health from
 symptoms the way this round of testing had to.
 
-## Outdoor navigation (GPS) — Ladies Hostel G / H / J
+## Outdoor navigation (GPS) — real routes from an open routing service
 
-A third venue, "Outdoor — Hostel Paths," covers all six directions between
-the three hostel blocks (G↔H, G↔J, H↔J). It works completely differently
-from the two indoor venues, on purpose:
+The outdoor venue ("Outdoor — Hostel Paths," covering all six directions
+between Ladies Hostel G/H/J) no longer routes from a hand-built graph.
+GPS answers "where am I" directly (no confirmation prompt needed the way
+indoor requires — see `js/gps-nav.js`'s `GpsTracker`), and the actual walk
+to any destination — the three hostels by name, or literally anywhere
+else — is fetched live from an open routing service via
+`js/route-provider.js`. This is what "all kinds of paths possible" means
+in practice: it's not limited to a fixed set of pre-mapped waypoints.
 
-**No coordinate is ever guessed.** Every outdoor waypoint (`js/venues/
-outdoor-hostels.js`) starts with `lat`/`lon` set to `null` and *stays*
-`null` until someone physically stands there and captures a real GPS
-reading. I tested this directly: with zero waypoints calibrated,
-`shortestPath()` returns `null` rather than routing through invented
-coordinates — confirmed with a script before this shipped. For a tool
-guiding someone who can't see the path, a wrong outdoor coordinate is a
-safety issue, not a rounding error, so there's no fallback here the way
-there is for the indoor compass/step-counting issues above.
+**How a destination resolves**: say a hostel name (`"hostel g"` etc.) and
+it uses that node's coordinate if calibrated, or falls back to geocoding
+the name via Nominatim (OpenStreetMap's geocoder) if not. Say anything
+else — any place name — and it geocodes directly. Either way, once a
+destination coordinate exists, a real walking route is fetched between
+your current GPS position and it.
 
-**How to calibrate it**: open Settings → Outdoor Calibration (or say "hey
-nav calibrate waypoints") while on the outdoor venue. Walk to each of the
-12 waypoints listed, tap **Capture here** (it averages 5 GPS readings over
-a few seconds, weighted toward the more accurate ones, and shows a
-warning if accuracy is poor), and its status flips to ✅. When done, tap
-**Export calibration** and paste the result into the `CALIBRATED_COORDS`
-object at the top of `js/venues/outdoor-hostels.js` — that's what makes it
-permanent for everyone, the same pattern as the QR sticker workflow.
+**Two honest caveats that come with using real map data, not invented
+coordinates:**
 
-**The 9 via-points between entrances are a *shape* guess, not a coordinate
-guess** — I don't know if the real path bends twice or five times between
-any two hostels. Add or remove waypoints in that file to match the actual
-path once you've walked it; nothing about the calibration tool requires
-exactly this skeleton.
+1. **OSRM's free demo server's foot-routing support is genuinely
+   disputed.** Official docs say it serves car+foot+bike; independent
+   developer reports (OpenStreetMap's own help forum, GitHub issues) say
+   it silently returns driving-style routes for foot requests. This app
+   defaults to OSRM because it needs zero setup — verify early that routes
+   and times look like walking, not driving. If not, switch
+   `DEFAULT_PROVIDER` in `js/route-provider.js` to `'ors'` and get a free
+   OpenRouteService API key (openrouteservice.org/sign-up), which has an
+   unambiguous dedicated walking profile.
+2. **Your specific campus paths are very likely not in OpenStreetMap
+   yet.** Internal campus footpaths are one of the most common OSM
+   coverage gaps — public roads get mapped, internal walkways often
+   don't. If they're not mapped, any router (this, Google, anything) will
+   route along the nearest mapped road instead of the real path, which
+   matters for a mobility aid. `checkRouteSanity()` in
+   `route-provider.js` compares the route distance to the straight-line
+   distance and warns by voice if a route looks suspiciously indirect —
+   it catches obviously-wrong routes, not every case. **The real fix**:
+   add the paths yourself at openstreetmap.org (free account, iD editor,
+   trace the paths you actually walk) — after that, any OSM-based router
+   routes through them correctly, immediately, everywhere.
 
-**Once calibrated, navigation is GPS-driven, not step-counted.** This is a
-meaningful improvement over the indoor approach: bearing and remaining
-distance are recomputed from your actual live position on every GPS
-update (roughly once a second), so there's no accumulating drift and
-nothing to get permanently stuck the way indoor step-counting could
-(see above) — "arrival" is real proximity to the waypoint's calibrated
-coordinates, scaled to the phone's reported GPS accuracy. The AR ground
-path, turn-by-turn voice, and hazard detection all reuse the exact same
-code as indoor; only the position source changes.
+**Once a route is fetched, tracking is GPS-driven, not step-counted.**
+Bearing and remaining distance are recomputed from your actual live
+position against the route's polyline on every GPS update, so there's no
+accumulating drift and nothing to get permanently stuck the way indoor
+step-counting could (see above) — arrival is real proximity, scaled to
+the phone's reported GPS accuracy. The AR ground path reuses the exact
+same rendering code as indoor; only the position/bearing source changes.
 
-I verified the full loop end-to-end with a simulated walk: calibrate 5
-waypoints along a straight line → route between them → feed in sequential
-GPS fixes approximating an actual walk → correct turn-by-turn distances
-throughout → correct arrival. The haversine distance and bearing formulas
-were checked against independent references (cardinal-direction test
-cases, and the well-documented ~344km London-to-Paris distance) before
-being trusted for any of this.
+**Calibration is now optional**, not required to unlock routing (Settings
+→ Outdoor Calibration, or say "hey nav calibrate waypoints"). Capturing a
+hostel's real entrance coordinate — stand there, tap **Capture here**, it
+averages 5 GPS readings — just makes that specific endpoint exact, since a
+geocoded building coordinate from OSM is often just a centroid, not the
+actual entrance. Tap **Export calibration** and paste the result into
+`CALIBRATED_COORDS` in `js/venues/outdoor-hostels.js` to make it permanent.
+
+I verified the full loop end-to-end with mocked API responses matching
+documented formats: request a route → parse a realistic OSRM response →
+feed in sequential GPS fixes approximating an actual walk → correct
+bearing/distance at each polyline point → correct arrival. Also verified
+separately: the geocoding fallback for uncalibrated destinations, and the
+sanity-check warning firing on a deliberately indirect mock route. The
+haversine distance and bearing formulas were checked against independent
+references (cardinal-direction test cases, and the well-documented
+~344km London-to-Paris distance) before being trusted for any of this.
+
+## AI voice assistant (OpenAI) — open-ended questions
+
+New voice commands — "what's ahead", "how's the traffic", "describe the
+scene" — are answered by OpenAI (`js/ai-assistant.js`), given the exact
+same structured, deterministic data the rest of the app already computes
+(current location, active route, nearest detected hazard, traffic level).
+This mirrors the shared planning document's architecture (computer vision
+→ structured context → LLM → natural language), calling OpenAI directly
+from the browser instead of through a separate Python/FastAPI backend.
+
+**The API key is never committed anywhere.** Enter it once in Settings →
+AI Voice Assistant; it's stored in that browser's `localStorage` only. If
+you ever see a key in a source file or a git commit, treat it as
+compromised and rotate it immediately — that should never happen with
+this setup, but it's worth knowing what "wrong" looks like.
+
+**The deterministic hazard system still runs independently and always
+wins.** OpenAI answers direct questions; it does not gate or delay
+critical obstacle warnings, which come from the existing zone/priority
+system in `hazards.js` regardless of whether an API key is even set.
+
+I tested the request/response handling against realistic mocked responses
+matching OpenAI's documented API format — successful answers, an invalid
+key (401), rate limiting (429), and network failure all produce a clear
+spoken message rather than a silent failure or hang.
+
+## Traffic detection
+
+`hazards.js` now also recognizes car, motorcycle, bus, bicycle, and truck
+— the same COCO-SSD model already loaded for indoor obstacle detection,
+just with vehicle classes turned on. A rolling average over the last 5
+detection ticks smooths this into a LOW/MEDIUM/HIGH traffic level, which
+feeds both the "how's the traffic" voice answer and, for a vehicle at
+close range, an ordinary critical-zone hazard warning like any other
+obstacle. This is a simple visible-in-frame count, not a calibrated
+traffic-engineering metric — it answers "does it look busy right now,"
+which is what a pedestrian actually needs.
 
 ## Venues included
 
@@ -199,7 +225,7 @@ being trusted for any of this.
 |---|---|
 | **SJT — 7th floor corner** | staircase, entrance lobby, rooms 711/712, faculty cabins, water cooler, women's washroom (714), room 715, open corridor, far end of corridor |
 | **H Block — 3rd floor** | lift, staircase, water cooler, washroom, main corridor / walking area, storage room, common room (sofa), corridor turn, dormitory rooms, balcony (drying area) |
-| **Outdoor — Hostel Paths** | Ladies Hostel G, H, J, and 9 path waypoints between them — see "Outdoor navigation" above; requires on-site calibration before it can route anywhere |
+| **Outdoor — Hostel Paths** | Ladies Hostel G/H/J plus specific real entrances (G/J main entrances, J's lift/side entrance, the shared mess entrance), the main gate, both convenience stores, the guest house, and bicycle parking — from real hand-sketched maps of the area, not a generic guess. Plus literally any other place name via live geocoding + real routing. See "Outdoor navigation" above. |
 
 Indoor venues' data live in `js/venues/*.js` in the same format, so adding
 a fourth floor later is just a new file plus one `registerVenue()` call.
@@ -266,21 +292,23 @@ tap it from **Show destination list**.
 | Voice destination recognition (Web Speech API + synonym matching, "Hey Nav" wake word) | Working |
 | Shortest-path routing (Dijkstra) + turn-by-turn instructions | Working |
 | Location check-in ("I'm at the lift") replacing the fixed-start assumption | Working |
-| QR sticker location scanning (authoritative, drift-correcting) | Working — needs stickers physically printed and placed, see "QR location stickers" above |
-| Ambient visual place matching (soft hint + bubble, no sticker in view) | Working, but low-confidence by design — see "Where are you starting from?" above for why it's deliberately conservative |
+| Ambient visual place matching (indoor soft hint + bubble) | Working, but low-confidence by design — see "Where are you starting from?" above for why it's deliberately conservative |
 | AR ground-path overlay, curves toward turns | Working, with a straight-ahead fallback confirmed necessary on real hardware — see "AR ground path" above |
 | Manual "Next" advance (voice or button) as a step-counting safety net | Working — added after real-device testing showed step-counting can silently never fire |
-| Outdoor GPS navigation (Ladies Hostel G/H/J) | Working, but requires on-site calibration before it can route anywhere — no coordinate is ever guessed, see "Outdoor navigation" above |
+| Outdoor GPS navigation, any destination via live routing | Working — see "Outdoor navigation" above for the two honest caveats (disputed OSRM foot-routing reliability, possibly-unmapped campus paths) |
 | Step-counted progress along a route (dead reckoning) | Working, adjustable stride length in Settings |
 | Person / chair / table / sofa hazard warnings with left-right correction | Working (TensorFlow.js COCO-SSD) |
+| Vehicle detection + traffic level (LOW/MEDIUM/HIGH) | Working — see "Traffic detection" above |
+| OpenAI voice assistant ("what's ahead", "how's the traffic", "describe the scene") | Working once you add an API key in Settings — see "AI voice assistant" above |
 | "Steps ahead" detection | **Heuristic placeholder** — edge-density guess, will false-positive on plain tile floors. Swap in a real geometric detector for production use. |
 | "Door closed / open" | **Not vision-detected** — the app announces "there's a door here" from the map data (`isDoor` flag) since COCO-SSD has no door class. |
 
-## Calibration (do this once, on each real floor)
+## Indoor calibration (do this once, on each real floor)
 
-Each venue file in `js/venues/` was authored by inspecting photos and
-video, not surveyed — the room layout and connections are right, but
-distances and exact bearings are estimates. To calibrate:
+Each indoor venue file in `js/venues/` was authored by inspecting photos
+and video, not surveyed — the room layout and connections are right, but
+distances and exact bearings are estimates. (Outdoor calibration is a
+different, optional process — see "Outdoor navigation" above.) To calibrate:
 
 1. Walk each edge in that venue's `EDGES` array and update `distance_m`
    with the actual paced or taped distance.

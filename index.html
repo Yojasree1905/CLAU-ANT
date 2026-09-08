@@ -173,7 +173,7 @@
         <div class="setting-item toggle-row">
           <div>
             <span class="setting-label">Real-Time Obstacle Warnings</span>
-            <span class="setting-subtext">Alerts for people, chairs, tables, and sofas</span>
+            <span class="setting-subtext">Alerts for people, chairs, tables, sofas, and vehicles</span>
           </div>
           <label class="switch">
             <input type="checkbox" id="hazard-toggle" checked />
@@ -182,11 +182,25 @@
         </div>
       </section>
 
+      <!-- Section: OpenAI Voice Assistant -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">AI Voice Assistant</h3>
+        <p class="section-desc">
+          Powers "what's ahead", "how's the traffic", and "describe the scene". Your key is stored only on this device (browser localStorage) — it is never saved to any file or sent anywhere except OpenAI.
+        </p>
+        <div class="setting-item">
+          <label for="openai-key-input" class="setting-label">OpenAI API Key</label>
+          <input type="password" id="openai-key-input" placeholder="sk-..." style="width:100%; margin-top:6px; padding:8px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.05); color:inherit;" autocomplete="off" />
+        </div>
+        <button id="save-openai-key-btn" class="pill-action-btn" style="margin-top:10px;">Save key</button>
+        <span id="openai-key-status" class="setting-subtext" style="display:block; margin-top:6px;"></span>
+      </section>
+
       <!-- Section: Outdoor GPS Waypoint Calibration -->
       <section class="sidebar-section" id="calibration-section" style="display:none;">
-        <h3 class="section-heading">Outdoor Calibration</h3>
+        <h3 class="section-heading">Outdoor Calibration (optional)</h3>
         <p class="section-desc">
-          Walk to each waypoint below and tap Capture — coordinates are only ever set by physically standing there, never guessed.
+          Routing works to any destination via GPS + an open routing service, no calibration required. Capturing a hostel entrance here just makes THAT endpoint exact — more precise than a place-name search — coordinates are only ever set by physically standing there, never guessed.
         </p>
         <ul id="calibration-list" aria-label="Outdoor waypoints to calibrate"></ul>
         <button id="export-calibration-btn" class="pill-action-btn" style="margin-top:10px;">Export calibration</button>
@@ -244,16 +258,16 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.20.0/tf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/coco-ssd/2.2.3/coco-ssd.min.js"></script>
 
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="js/venue-graph.js"></script>
 <script src="js/venues/sjt-7th-floor.js"></script>
 <script src="js/venues/outdoor-hostels.js"></script>
 <script src="js/gps-nav.js"></script>
+<script src="js/route-provider.js"></script>
+<script src="js/ai-assistant.js"></script>
 <script src="js/venues/hblock-3rd-floor.js"></script>
 <script src="js/localization.js"></script>
 <script src="js/venues/sjt-7th-floor.fingerprints.js"></script>
 <script src="js/venues/hblock-3rd-floor.fingerprints.js"></script>
-<script src="js/qr-scanner.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/ar.js"></script>
 <script src="js/hazards.js"></script>

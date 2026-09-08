@@ -1,7 +1,7 @@
 /**
  * gps-nav.js
  * -----------------------------------------------------------------------
- * Outdoor counterpart to the indoor pedometer/QR system. Two distinct
+ * Outdoor counterpart to the indoor pedometer system. Two distinct
  * jobs, kept in one file because they share the same underlying
  * `navigator.geolocation` API:
  *

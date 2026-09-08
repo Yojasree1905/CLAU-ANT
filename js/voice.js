@@ -28,6 +28,7 @@ class VoiceIO {
     onLocationSet,
     onNextRequested,
     onCalibrateRequested,
+    onAiQuery,
   } = {}) {
     this.onDestinationRequest = onDestinationRequest;
     this.onStop = onStop;
@@ -40,6 +41,7 @@ class VoiceIO {
     this.onLocationSet = onLocationSet; // (placePhrase) => void — "I'm at the lift"
     this.onNextRequested = onNextRequested; // () => void — manual leg-advance fallback
     this.onCalibrateRequested = onCalibrateRequested; // () => void — open outdoor calibration panel
+    this.onAiQuery = onAiQuery; // (question) => void — open-ended question for the OpenAI layer
 
     this.synth = window.speechSynthesis;
     this.lastSpokenAt = new Map();
@@ -381,6 +383,16 @@ class VoiceIO {
     if (/\b(calibrate|calibration)\b.*\b(waypoint|point|location)s?\b|calibrate waypoints/.test(cleanText)) {
       this.playChime('success');
       this.onCalibrateRequested && this.onCalibrateRequested();
+      return;
+    }
+
+    // 3e. Open-ended questions answered by the OpenAI layer — "what's
+    // ahead", "how's the traffic", "describe the scene". Checked before
+    // the generic destination fallback so these don't get misread as a
+    // place name.
+    if (/\b(what'?s ahead|what is ahead|describe the scene|describe my surroundings|how'?s the traffic|how is the traffic|traffic (?:status|update|level))\b/.test(cleanText)) {
+      this.playChime('success');
+      this.onAiQuery && this.onAiQuery(cleanText);
       return;
     }
 
