@@ -24,11 +24,13 @@ const state = {
   stepCount: 0,
   lastAccelMag: 0,
   lastStepAt: 0,
+  lastMotionEventAt: null, // diagnostic: last time ANY devicemotion event fired, regardless of step threshold
   isAssistantRunning: false,
   lastAnnouncedLandmark: null, // for the ambient "you're near X" bubble
 };
 
 let localizer = null; // set once the camera is running (see startAssistant)
+let qrScanner = null; // set once the camera is running (see startAssistant)
 
 const settings = {
   strideLengthM: 0.70,
@@ -74,6 +76,7 @@ function init() {
   els.voiceHint = document.getElementById('voice-hint');
   els.routeControls = document.getElementById('route-controls');
   els.repeatBtn = document.getElementById('repeat-btn');
+  els.nextLegBtn = document.getElementById('next-leg-btn');
   els.stopBtn = document.getElementById('stop-btn');
 
   // Sidebar elements
@@ -110,6 +113,7 @@ function init() {
     onStateChange: handleVoiceStateChange,
     onWakeWord: handleWakeWordDetected,
     onLocationSet: handleLocationSet,
+    onNextRequested: forceAdvanceLeg,
   });
   voice.rate = settings.voiceRate;
   voice.chimesEnabled = settings.audioChimes;
@@ -127,6 +131,7 @@ function init() {
   // Wire events
   els.micBtn.addEventListener('click', onMicTapped);
   els.repeatBtn.addEventListener('click', repeatCurrentLeg);
+  els.nextLegBtn.addEventListener('click', forceAdvanceLeg);
   els.stopBtn.addEventListener('click', handleStopRequested);
   els.sidebarToggleBtn.addEventListener('click', () => toggleSidebar(true));
   els.sidebarCloseBtn.addEventListener('click', () => toggleSidebar(false));
@@ -268,7 +273,7 @@ function renderDestinationList() {
   }
   if (els.destSectionDesc) {
     els.destSectionDesc.textContent = locating
-      ? 'Tap the place closest to you, or say "hey nav I\'m at" and a place.'
+      ? 'Point your camera at a location sticker, tap a place below, or say "hey nav I\'m at" and a place.'
       : 'Or speak: "Hey Nav, take me to [destination]"';
   }
 
@@ -344,6 +349,7 @@ async function startAssistant() {
     els.video.srcObject = camStream;
     await els.video.play();
     localizer = new Localizer(els.video);
+    qrScanner = new QrScanner(els.video);
     startAmbientLandmarkWatch();
   } catch (err) {
     setStatus('Voice guidance active (no camera).');
@@ -532,7 +538,18 @@ async function promptForLocation() {
   state.awaitingLocationConfirmation = true;
   renderDestinationList(); // re-render so taps set location instead of routing
   setStatus('Where are you right now?');
-  els.subtitle.textContent = 'Where are you right now?';
+  els.subtitle.textContent = 'Point your camera at a location sticker, or say where you are';
+
+  // QR scan runs in the background the whole time this prompt is open —
+  // whichever resolves first (sticker scan, voice, or a tap) wins. A
+  // scanned sticker is treated as ground truth, no confirmation needed,
+  // unlike the soft vision guess below.
+  if (qrScanner) {
+    qrScanner.scanUntilFound({ timeoutMs: 25000 }).then((hit) => {
+      if (!hit || !state.awaitingLocationConfirmation) return; // prompt already resolved another way
+      applyQrLocation(hit);
+    });
+  }
 
   let suggestion = null;
   if (localizer) {
@@ -542,18 +559,54 @@ async function promptForLocation() {
     } catch (_) { /* camera not ready yet — fine, just skip the hint */ }
   }
 
+  if (!state.awaitingLocationConfirmation) return; // a QR scan already resolved this while we were sampling
+
   if (suggestion) {
     voice.speak(
-      `Where are you right now? It looks like you might be near ${suggestion} — say "hey nav I'm at ${suggestion}" if that's right, or tell me your actual location.`,
+      `Where are you right now? Point the camera at a location sticker if you can see one, or it looks like you might be near ${suggestion} — say "hey nav I'm at ${suggestion}" if that's right.`,
       { key: 'locate-prompt', interrupt: true }
     );
   } else {
     voice.speak(
-      'Where are you right now? Say "hey nav I\'m at" followed by a place, like the lift or the water cooler, or pick it from the list.',
+      'Where are you right now? Point the camera at a location sticker, say "hey nav I\'m at" followed by a place, or pick it from the list.',
       { key: 'locate-prompt', interrupt: true }
     );
   }
   toggleSidebar(true);
+}
+
+/** A scanned sticker is authoritative — no fuzzy matching, no confirmation
+ * round-trip, and it also silently corrects the current venue if the
+ * sticker belongs to the other floor (e.g. the user walked into the wrong
+ * building's copy of the app). */
+function applyQrLocation(hit) {
+  if (!window.VENUES[hit.venueId]) return;
+  if (hit.venueId !== state.venueId) {
+    switchVenue(hit.venueId, { spoken: false });
+  }
+  const graph = currentVenue().graph;
+  if (!graph.nodes.has(hit.nodeId)) return;
+
+  state.currentNodeId = hit.nodeId;
+  state.awaitingLocationConfirmation = false;
+  state.distanceWalkedOnLeg = 0;
+  state.lastAnnouncedLandmark = hit.nodeId;
+  const label = graph.nodes.get(hit.nodeId).label;
+  renderDestinationList();
+  ar && ar.showBubble(`You're at: ${label}`);
+
+  if (state.pendingDestination) {
+    const destId = state.pendingDestination;
+    state.pendingDestination = null;
+    voice.speak(`Sticker scanned — you're at ${label}.`, { key: 'location-confirmed', interrupt: true });
+    routeTo(destId);
+  } else {
+    voice.speak(`Sticker scanned — you're at ${label}. Say a destination whenever you're ready.`, {
+      key: 'location-confirmed',
+      interrupt: true,
+    });
+    setStatus(`Location confirmed: ${label}`);
+  }
 }
 
 function handleLocationSet(phrase) {
@@ -565,6 +618,8 @@ function handleLocationSet(phrase) {
     });
     return;
   }
+
+  qrScanner && qrScanner.stop(); // this resolved the check-in another way
 
   state.currentNodeId = nodeId;
   state.awaitingLocationConfirmation = false;
@@ -631,16 +686,28 @@ function announceCurrentStatus() {
   const remaining = Math.max(leg.distance_m - state.distanceWalkedOnLeg, 0);
   const destLabel = state.legs[state.legs.length - 1].toLabel;
   const fromLabel = currentVenue().graph.nodes.get(state.currentNodeId)?.label || 'your last confirmed spot';
-  voice.speak(
-    `Heading toward ${destLabel}, started from ${fromLabel}. About ${remaining.toFixed(0)} meters left to ${leg.toLabel}.`,
-    { key: 'status-nav', interrupt: true }
-  );
+  let msg = `Heading toward ${destLabel}, started from ${fromLabel}. About ${remaining.toFixed(0)} meters left to ${leg.toLabel}.`;
+
+  // Diagnostic add-on: found via real-device testing that step-counting can
+  // silently never fire on some phones, freezing progress with no obvious
+  // symptom other than "the distance never changes." Surface that directly
+  // instead of leaving the person to guess.
+  const motionSilent = state.lastMotionEventAt === null || Date.now() - state.lastMotionEventAt > 5000;
+  if (motionSilent) {
+    msg += ' I\'m not detecting your footsteps on this phone — say "next" or tap Next when you reach a point.';
+  }
+  if (ar && !ar.hasLiveHeading) {
+    msg += ' No compass signal either, so the arrow is just pointing straight ahead.';
+  }
+
+  voice.speak(msg, { key: 'status-nav', interrupt: true });
 }
 
 function announceHelp() {
   voice.speak(
     'Say "Hey Nav" followed by: "Take me to [place]", "I\'m at [place]" to set your location, ' +
-      '"Where is [place]", "Repeat", "Where am I", "Switch floor", or "Stop".',
+      '"Where is [place]", "Repeat", "Next" to manually advance a step, "Where am I", "Switch floor", or "Stop". ' +
+      'You can also just point the camera at a location sticker to confirm where you are.',
     { key: 'help', interrupt: true }
   );
 }
@@ -687,11 +754,28 @@ function advanceLeg() {
   announceCurrentLeg();
 }
 
+/**
+ * Manual escape hatch for when step-counting silently never fires — found
+ * to be a real issue on-device: if devicemotion events never arrive (some
+ * phones/browsers gate this, or the accelerometer isn't delivering data),
+ * distanceWalkedOnLeg never increases and the route gets stuck on the
+ * first leg forever, no matter how far the user actually walks. Tapping
+ * "Next" (or saying "hey nav next") advances the route the same way
+ * reaching the distance threshold would, without waiting on a sensor that
+ * may never report in.
+ */
+function forceAdvanceLeg() {
+  if (state.phase !== 'navigating') return;
+  voice.speak('Moving to the next step.', { key: 'manual-advance', interrupt: true });
+  advanceLeg();
+}
+
 // ---------------------------------------------------------------------
 // Pedometer Dead Reckoning
 // ---------------------------------------------------------------------
 
 function onDeviceMotion(e) {
+  state.lastMotionEventAt = Date.now(); // diagnostic: proves devicemotion fires at all, even below the step threshold
   if (state.phase !== 'navigating') return;
   const a = e.accelerationIncludingGravity;
   if (!a) return;
@@ -743,7 +827,21 @@ let ambientWatchTimer = null;
 function startAmbientLandmarkWatch() {
   if (ambientWatchTimer) clearInterval(ambientWatchTimer);
   ambientWatchTimer = setInterval(() => {
-    if (!localizer || !state.venueId || !settings.hazardsEnabled) return;
+    if (!state.venueId || !settings.hazardsEnabled) return;
+
+    // QR stickers are authoritative — check them first. Seeing one mid-walk
+    // silently re-anchors position (corrects any step-counting drift) and,
+    // if it's the confirmed spot rather than just a hint, resets the "might
+    // be" ambiguity entirely.
+    if (qrScanner) {
+      const hit = qrScanner.scanFrame();
+      if (hit && window.VENUES[hit.venueId]?.graph.nodes.has(hit.nodeId)) {
+        handleAmbientQrSighting(hit);
+        return;
+      }
+    }
+
+    if (!localizer) return;
     const ranked = localizer.matchVenue(state.venueId);
     if (ranked.length < 1) {
       ar && ar.clearBubble();
@@ -770,6 +868,45 @@ function startAmbientLandmarkWatch() {
       });
     }
   }, 2500);
+}
+
+/**
+ * A QR sticker spotted in passing (not during the explicit "where are
+ * you?" prompt). If we're mid-route, this corrects position drift by
+ * recomputing the remaining path from here instead of trusting accumulated
+ * step-counting — the same self-correction real turn-by-turn nav apps do
+ * whenever they get a fresh fix.
+ */
+function handleAmbientQrSighting(hit) {
+  const graph = currentVenue().graph;
+  if (hit.venueId !== state.venueId || !graph.nodes.has(hit.nodeId)) return;
+  const label = graph.nodes.get(hit.nodeId).label;
+
+  if (state.lastAnnouncedLandmark !== hit.nodeId) {
+    state.lastAnnouncedLandmark = hit.nodeId;
+    ar && ar.showBubble(`You're at: ${label}`);
+    voice.speak(`Confirmed: you're at ${label}.`, { key: `qr-${hit.nodeId}`, cooldownMs: 10000 });
+  }
+
+  if (state.phase === 'navigating' && hit.nodeId !== state.currentNodeId) {
+    const finalDestId = state.legs[state.legs.length - 1]?.toId;
+    if (finalDestId && finalDestId !== hit.nodeId) {
+      state.currentNodeId = hit.nodeId;
+      const result = graph.shortestPath(hit.nodeId, finalDestId);
+      if (result) {
+        state.legs = graph.buildLegs(result.path);
+        state.legIndex = 0;
+        state.distanceWalkedOnLeg = 0;
+        voice.speak(`Position corrected. Recalculating from ${label}.`, {
+          key: 'qr-reroute',
+          interrupt: true,
+        });
+        announceCurrentLeg();
+      }
+    }
+  } else if (!state.currentNodeId) {
+    state.currentNodeId = hit.nodeId;
+  }
 }
 
 // ---------------------------------------------------------------------

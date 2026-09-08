@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sjt7-navassist-v4';
+const CACHE_NAME = 'sjt7-navassist-v5';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const CORE_ASSETS = [
   './js/localization.js',
   './js/venues/sjt-7th-floor.fingerprints.js',
   './js/venues/hblock-3rd-floor.fingerprints.js',
+  './js/qr-scanner.js',
   './js/voice.js',
   './js/ar.js',
   './js/hazards.js',

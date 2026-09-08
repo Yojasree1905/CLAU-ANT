@@ -54,29 +54,95 @@ lift — say yes or tell me your real location"), but a human always
 confirms. It also runs in the background the whole time you're using the
 app to power the landmark bubble below.
 
+## QR location stickers — the actual reliable fix
+
+Prompted by AR research showing indoor systems typically calibrate
+position by scanning a marker at a known point ("Anchor Points"), the
+soft color-matching above now has a hard, unambiguous counterpart: a
+printed QR sticker at each landmark. Scanning one gives an exact position
+fix — no confidence thresholds, no confirmation round-trip.
+
+**Setup**: print `qr-codes/sjt7-print-sheet.pdf` and
+`qr-codes/hblock3-print-sheet.pdf` (or individual stickers from
+`qr-codes/<venue>/<place>.png`), cut them apart, and stick one up at each
+landmark. Each encodes `NAVASSIST:<venue>:<place>` and includes a
+human-readable label so you know which goes where even without scanning
+it. Re-run `python3 scripts/generate_qr_codes.py` if you rename or add
+nodes in `js/venues/*.js` — keep the `REFERENCES`-equivalent node list at
+the top of that script in sync with the venue files.
+
+**What it does**, once stickers are up:
+- During the "where are you?" check-in, pointing the camera at a sticker
+  resolves it instantly — faster and far more reliable than the voice/tap
+  fallback, which still works if you don't have a sticker handy.
+- Scanning the wrong building's sticker auto-switches the active floor.
+- **Mid-route drift correction**: if a sticker comes into view while
+  you're already navigating, the app silently re-anchors your position and
+  recalculates the remaining path from there — instead of trusting
+  accumulated step-counting, which drifts. This is very likely the actual
+  fix for "the arrows aren't working" reports: a wrong current-position
+  estimate produces a wrong bearing, which looks exactly like broken arrow
+  rendering even though the arrow math itself is fine.
+
+This doesn't replace the voice/tap location check-in — it's a faster, more
+reliable option layered on top, for anywhere you're willing to put up a
+sticker.
+
 ## The "you're near X" bubble
 
 Per the request that identifying *any* recognized place — not just your
 destination — should surface something on screen: the same visual matcher
-runs continuously (every 2.5s) while the assistant is active. When it
-recognizes a landmark with a confident, clearly-separated match, a small
-blue bubble appears near the top of the screen ("You might be near: the
-water cooler") and it's announced once by voice. Given the matching
-limitations above, treat this as a friendly hint, not a guarantee — it's
-intentionally worded "might be," and it stays silent rather than guess
-when the vision signal is ambiguous, which is often in this building.
+runs continuously (every 2.5s) while the assistant is active. QR stickers
+are checked first and are authoritative — spotting one shows "You're at:
+[place]" with full confidence and no wording hedge. Without a sticker in
+view, it falls back to the soft color-matching hint from the section
+above, worded "You might be near..." on purpose, and stays silent rather
+than guess when the vision signal is ambiguous, which is often in this
+building.
 
 ## AR ground path
 
-The camera overlay now draws a tapered path low in the frame that curves
-left or right toward your next turn, with chevrons flowing along it,
-instead of a floating rotating arrow badge. Beyond about 70° off — meaning
-the destination is essentially behind you — it switches to a clear
-"turn around" loop icon instead of stretching the path into something
-confusing. This is still a heading-based illusion (uses the phone's
-compass), not true floor-locked AR — see the comment at the top of
-`js/ar.js` for why real plane-tracked AR (WebXR) was deliberately not used:
-it only works on ARCore Android phones in Chrome, not iPhones.
+The camera overlay draws a tapered path low in the frame that curves left
+or right toward your next turn, with chevrons flowing along it, instead of
+a floating rotating arrow badge. Beyond about 70° off — meaning the
+destination is essentially behind you — it switches to a clear "turn
+around" loop icon instead of stretching the path into something confusing.
+This is still a heading-based illusion (uses the phone's compass), not
+true floor-locked AR — see the comment at the top of `js/ar.js` for why
+real plane-tracked AR (WebXR) was deliberately not used: it only works on
+ARCore Android phones in Chrome, not iPhones.
+
+**Real-device finding**: on-device screenshots at SJT showed the path
+never rendering at all — not misdirected, just never appearing. The
+"you're near X" bubble (also canvas-drawn) DID appear, proving the canvas
+pipeline itself was fine; the actual bug was that the arrow-drawing code
+refused to draw anything unless it had a valid compass reading, and this
+phone's compass apparently never delivered one — plausibly because
+concrete-and-rebar buildings are notorious for scrambling magnetometers.
+Fixed: `ArOverlay` now falls back to "assume you're already facing the
+target" (a straight-ahead arrow) whenever no live compass reading has
+arrived, with a small on-screen note ("No compass signal — showing
+straight-ahead") so it's clear when this fallback is active. It
+transparently upgrades to true compass-relative rendering the moment a
+real reading does show up.
+
+## Two sensor-dependent features can silently fail — here's the safety net
+
+The same device testing surfaced a second, related issue: all five
+screenshots taken while walking through clearly different physical spots
+showed the *identical* turn instruction and distance. That means
+step-counting (`onDeviceMotion` in `js/app.js`) never advanced the route
+past the first leg — most likely the same root cause as the compass issue
+(this phone/browser not delivering `devicemotion` events at all indoors).
+
+Rather than keep guessing at exactly why a given phone's sensors go quiet,
+the app now has an explicit escape hatch: a **"Next" button** next to
+Repeat/End Route, and the voice command **"hey nav next"** (also "skip",
+"I'm there", "I've arrived"), which manually advances to the next leg the
+same way reaching the distance threshold normally would. Asking "where am
+I" while navigating now also reports whether footsteps or a compass signal
+have been detected recently, so you don't have to infer sensor health from
+symptoms the way this round of testing had to.
 
 ## Venues included
 
@@ -149,8 +215,10 @@ tap it from **Show destination list**.
 | Voice destination recognition (Web Speech API + synonym matching, "Hey Nav" wake word) | Working |
 | Shortest-path routing (Dijkstra) + turn-by-turn instructions | Working |
 | Location check-in ("I'm at the lift") replacing the fixed-start assumption | Working |
-| Ambient visual place matching (background hint + bubble) | Working, but low-confidence by design — see "Where are you starting from?" above for why it's deliberately conservative |
-| AR ground-path overlay, curves toward turns | Working (needs a magnetometer; most Android/iPhone have one) |
+| QR sticker location scanning (authoritative, drift-correcting) | Working — needs stickers physically printed and placed, see "QR location stickers" above |
+| Ambient visual place matching (soft hint + bubble, no sticker in view) | Working, but low-confidence by design — see "Where are you starting from?" above for why it's deliberately conservative |
+| AR ground-path overlay, curves toward turns | Working, with a straight-ahead fallback confirmed necessary on real hardware — see "AR ground path" above |
+| Manual "Next" advance (voice or button) as a step-counting safety net | Working — added after real-device testing showed step-counting can silently never fire |
 | Step-counted progress along a route (dead reckoning) | Working, adjustable stride length in Settings |
 | Person / chair / table / sofa hazard warnings with left-right correction | Working (TensorFlow.js COCO-SSD) |
 | "Steps ahead" detection | **Heuristic placeholder** — edge-density guess, will false-positive on plain tile floors. Swap in a real geometric detector for production use. |

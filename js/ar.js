@@ -27,7 +27,8 @@ class ArOverlay {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.heading = null; // degrees, 0 = north
+    this.heading = null; // degrees, 0 = north; null until a real sensor reading arrives
+    this.hasLiveHeading = false; // true once at least one real orientation event has arrived
     this.targetBearing = null;
     this.distanceRemaining = null;
     this.destinationLabel = '';
@@ -35,6 +36,7 @@ class ArOverlay {
     this.dpr = window.devicePixelRatio || 1;
     this._reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this._flowPhase = 0;
+    this._startedAt = null;
     this._onOrientation = this._onOrientation.bind(this);
   }
 
@@ -58,6 +60,7 @@ class ArOverlay {
   start() {
     window.addEventListener('deviceorientationabsolute', this._onOrientation, true);
     window.addEventListener('deviceorientation', this._onOrientation, true);
+    this._startedAt = Date.now();
     this._raf();
   }
 
@@ -71,11 +74,34 @@ class ArOverlay {
     // webkitCompassHeading (iOS Safari) is already 0=north, clockwise-positive.
     if (typeof e.webkitCompassHeading === 'number') {
       this.heading = e.webkitCompassHeading;
+      this.hasLiveHeading = true;
     } else if (e.alpha !== null) {
       // 'alpha' increases counter-clockwise from device's initial orientation;
       // absolute=true + screen orientation 0 gives a usable compass proxy.
       this.heading = (360 - e.alpha) % 360;
+      this.hasLiveHeading = true;
     }
+    // If alpha is null, this event fired but carried no usable reading —
+    // common on phones without a working magnetometer, or where indoor
+    // metal/rebar has scrambled the compass. We deliberately do NOT set
+    // hasLiveHeading here, so _effectiveHeading() below keeps using the
+    // straight-ahead fallback instead of trusting a reading that never came.
+  }
+
+  /**
+   * Real device heading if we have one; otherwise a synthetic "assume
+   * you're already facing the target" heading, so the ground path always
+   * renders something instead of silently drawing nothing forever. This
+   * was a real bug found via on-device screenshots: several Android
+   * phones never fire a usable deviceorientation reading indoors (compass
+   * confused by structural steel/rebar), and the arrow overlay used to
+   * just never appear in that case — which looked exactly like "the
+   * arrows aren't implemented" even though the rendering code was fine.
+   */
+  _effectiveHeading() {
+    if (this.hasLiveHeading) return this.heading;
+    if (this.targetBearing === null) return null;
+    return this.targetBearing; // relative bearing 0 == "draw it straight ahead"
   }
 
   setTarget(bearingDeg, distanceMeters, label) {
@@ -125,16 +151,25 @@ class ArOverlay {
       contentTop += 34 + 14; // bubble height + gap
     }
 
-    if (this.targetBearing === null || this.heading === null) {
+    if (this.targetBearing === null) {
+      ctx.restore();
+      return;
+    }
+    const heading = this._effectiveHeading();
+    if (heading === null) {
       ctx.restore();
       return;
     }
 
-    let rel = this.targetBearing - this.heading;
+    let rel = this.targetBearing - heading;
     rel = ((rel + 540) % 360) - 180; // -180..180, 0 = straight ahead
 
     const labelTop = contentTop;
-    const pathTop = labelTop + 52 + 16; // label height + gap
+    let pathTop = labelTop + 52 + 16; // label height + gap
+    if (!this.hasLiveHeading) {
+      this._drawCompassFallbackNotice(w, pathTop);
+      pathTop += 26;
+    }
 
     // Beyond ~70deg the destination is essentially behind you — a curving
     // ground path can't sensibly represent that, so show a turn-around
@@ -299,6 +334,16 @@ class ArOverlay {
     ctx.closePath();
     ctx.fillStyle = 'rgba(217,154,43,0.95)';
     ctx.fill();
+    ctx.restore();
+  }
+
+  _drawCompassFallbackNotice(w, y) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '600 13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(217,154,43,0.9)'; // caution amber, matches turn-around color
+    ctx.fillText('No compass signal — showing straight-ahead', w / 2, y);
     ctx.restore();
   }
 

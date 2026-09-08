@@ -55,6 +55,13 @@
         <span>Repeat</span>
       </button>
 
+      <button id="next-leg-btn" class="pill-action-btn" aria-label="I've reached this point — advance to the next step" title="Use this if step-counting isn't advancing on your phone">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+        <span>Next</span>
+      </button>
+
       <button id="stop-btn" class="pill-action-btn pill-danger" aria-label="Stop navigation">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="6" y="6" width="12" height="12" rx="2"></rect>
@@ -218,12 +225,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.20.0/tf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/coco-ssd/2.2.3/coco-ssd.min.js"></script>
 
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="js/venue-graph.js"></script>
 <script src="js/venues/sjt-7th-floor.js"></script>
 <script src="js/venues/hblock-3rd-floor.js"></script>
 <script src="js/localization.js"></script>
 <script src="js/venues/sjt-7th-floor.fingerprints.js"></script>
 <script src="js/venues/hblock-3rd-floor.fingerprints.js"></script>
+<script src="js/qr-scanner.js"></script>
 <script src="js/voice.js"></script>
 <script src="js/ar.js"></script>
 <script src="js/hazards.js"></script>

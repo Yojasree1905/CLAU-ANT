@@ -26,6 +26,7 @@ class VoiceIO {
     onStateChange,
     onWakeWord,
     onLocationSet,
+    onNextRequested,
   } = {}) {
     this.onDestinationRequest = onDestinationRequest;
     this.onStop = onStop;
@@ -36,6 +37,7 @@ class VoiceIO {
     this.onStateChange = onStateChange;
     this.onWakeWord = onWakeWord;
     this.onLocationSet = onLocationSet; // (placePhrase) => void — "I'm at the lift"
+    this.onNextRequested = onNextRequested; // () => void — manual leg-advance fallback
 
     this.synth = window.speechSynthesis;
     this.lastSpokenAt = new Map();
@@ -362,6 +364,15 @@ class VoiceIO {
         this.onLocationSet && this.onLocationSet(place);
         return;
       }
+    }
+
+    // 3c. "Next" / "skip" / "I'm there" — manually advance to the next leg,
+    // for when step-counting isn't firing on this device (see app.js's
+    // forceAdvanceLeg for why this exists).
+    if (/\b(next step|next leg|skip step|skip|i'?m there|i've arrived|move on|advance)\b/.test(cleanText)) {
+      this.playChime('success');
+      this.onNextRequested && this.onNextRequested();
+      return;
     }
 
     // 4. Help / commands query

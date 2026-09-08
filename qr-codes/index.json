@@ -1,0 +1,97 @@
+[
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "The Staircase",
+    "file": "qr-codes/sjt7/stairs.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "The Entrance Lobby",
+    "file": "qr-codes/sjt7/lobby.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "Rooms 711 & 712",
+    "file": "qr-codes/sjt7/room_711_712.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "The Faculty Cabins",
+    "file": "qr-codes/sjt7/faculty_cabins.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "The Water Cooler",
+    "file": "qr-codes/sjt7/water_cooler.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "The Women's Washroom (714)",
+    "file": "qr-codes/sjt7/washroom_women.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "Room 715",
+    "file": "qr-codes/sjt7/room_715.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "The Open Corridor",
+    "file": "qr-codes/sjt7/open_corridor.png"
+  },
+  {
+    "venue": "SJT \u2014 7th floor corner",
+    "place": "Far End of Corridor",
+    "file": "qr-codes/sjt7/corridor_end.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Lift",
+    "file": "qr-codes/hblock3/lift.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Staircase",
+    "file": "qr-codes/hblock3/stairs.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Water Cooler",
+    "file": "qr-codes/hblock3/water_cooler.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Washroom",
+    "file": "qr-codes/hblock3/washroom.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "Main Corridor",
+    "file": "qr-codes/hblock3/corridor_start.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Storage Room",
+    "file": "qr-codes/hblock3/storage_pantry.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Common Room (Sofa)",
+    "file": "qr-codes/hblock3/common_room.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Corridor Turn",
+    "file": "qr-codes/hblock3/corridor_junction.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "Dormitory Rooms",
+    "file": "qr-codes/hblock3/dormitory_rooms.png"
+  },
+  {
+    "venue": "H Block \u2014 3rd floor",
+    "place": "The Balcony",
+    "file": "qr-codes/hblock3/balcony.png"
+  }
+]
