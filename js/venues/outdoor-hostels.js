@@ -48,8 +48,23 @@
 
   // Paste the output of the in-app "Export calibration" button here.
   // Format: { nodeId: { lat: <number>, lon: <number> }, ... }
+  // Calibrated on-site — verified against the sketched relative layout
+  // before committing (e.g. J and G main entrances are ~7m apart here,
+  // matching the short direct walkway shown connecting them).
   const CALIBRATED_COORDS = {
-    // (empty until calibrated on-site)
+    hostel_g: { lat: 12.9681554, lon: 79.1593860 }, // accuracy ~10m, 5 samples
+    j_main_entrance: { lat: 12.9682181, lon: 79.1594222 }, // accuracy ~13m, 5 samples
+    g_side_entrance: { lat: 12.9680115, lon: 79.1594173 }, // accuracy ~7m, 5 samples
+    g_main_entrance: { lat: 12.9682451, lon: 79.1594796 }, // accuracy ~14m, 5 samples
+    hostel_j: { lat: 12.9683771, lon: 79.1594841 }, // accuracy ~8m, 5 samples
+    convenience_store_north: { lat: 12.9677442, lon: 79.1596394 }, // accuracy ~14m, 5 samples
+    hostel_h: { lat: 12.9679906, lon: 79.1594173 }, // accuracy ~19m, 5 samples
+    j_side_lift_entrance: { lat: 12.9679915, lon: 79.1593436 }, // accuracy ~7m, 5 samples
+    guest_house: { lat: 12.9678287, lon: 79.1593953 }, // accuracy ~15m, 5 samples
+    convenience_store_south: { lat: 12.9678412, lon: 79.1595412 }, // accuracy ~33m, 5 samples
+    bicycle_parking: { lat: 12.9679155, lon: 79.1598049 }, // accuracy ~6m, 5 samples
+    main_gate: { lat: 12.9683245, lon: 79.1594908 }, // accuracy ~9m, 5 samples
+    mess_entrance: { lat: 12.9677146, lon: 79.1596414 }, // accuracy ~8m, 5 samples
   };
 
   const NODES = [
