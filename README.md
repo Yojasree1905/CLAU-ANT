@@ -278,6 +278,31 @@ the exact center of the canvas) and end-to-end in a real running browser
 via Playwright (fed fake detections, confirmed the boxes render in the
 right place with no console errors) before considering this done.
 
+**Real-device finding**: shipped this, then got a report of "I cannot see
+any outlines" — and the synthetic Playwright test above, while it proved
+the rendering *math* was correct, hadn't caught a real layering bug:
+`#ar-canvas` had no explicit `z-index`, while the top bar and voice-hub
+control bar both have `z-index: 20`. Any hazard outline positioned in the
+bottom third of the frame — exactly where a close, critical-zone
+detection's bounding box naturally extends, since a nearby object fills
+more of the frame — was being silently painted *underneath* the opaque
+voice-hub bar. Fixed by giving `#ar-canvas` a higher `z-index` (25, still
+safely below the settings sidebar at 90/100); `pointer-events: none` on
+the canvas means this doesn't block taps on the buttons underneath it.
+Reproduced the exact failure with a synthetic box extending into that
+region, confirmed it was invisible before the fix and fully visible
+after, in an actual rendered screenshot both times.
+
+Also added a small on-screen diagnostic (bottom-left, green monospace —
+developer-visible, not meant to be pretty) showing whether the hazard
+model loaded successfully and how many objects it's currently seeing, so
+future "I can't see X" reports are diagnosable from a screenshot instead
+of requiring another guess-and-check round. It also caught, live in this
+sandbox, a genuine model-load failure (cdnjs blocked here) and confirmed
+the app degrades gracefully — voice navigation keeps working, with a
+clear spoken notice that hazard warnings won't be available that session,
+rather than crashing or failing silently.
+
 ## Why Location-based AR, not image-recognition AR
 
 Prompted by reference material on AR types, worth stating plainly why
@@ -371,6 +396,7 @@ tap it from **Show destination list**.
 | Ambient visual place matching (indoor soft hint + bubble) | Working, but low-confidence by design — see "Where are you starting from?" above for why it's deliberately conservative |
 | AR ground-path overlay, curves toward turns | Working, with a straight-ahead fallback confirmed necessary on real hardware — see "AR ground path" above |
 | Manual "Next" advance (voice or button) as a step-counting safety net | Working — added after real-device testing showed step-counting can silently never fire |
+| Outlining AR hazard boxes actually visible on real devices | Fixed a z-index layering bug — see "Outlining AR" above |
 | Outdoor GPS navigation, any destination via live routing | Working — see "Outdoor navigation" above for the two honest caveats (disputed OSRM foot-routing reliability, possibly-unmapped campus paths) |
 | Step-counted progress along a route (dead reckoning) | Working, adjustable stride length in Settings |
 | Person / chair / table / sofa hazard warnings with left-right correction | Working (TensorFlow.js COCO-SSD) |

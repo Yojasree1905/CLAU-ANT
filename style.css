@@ -69,6 +69,12 @@ html, body {
   width: 100%;
   height: 100%;
   pointer-events: none;
+  /* Must sit ABOVE the top bar and voice hub (both z-index:20) — otherwise
+     any hazard outline positioned in the bottom third of frame (exactly
+     where a close, critical-zone detection's box naturally extends) gets
+     hidden behind the opaque voice-hub bar. pointer-events:none above
+     means this never blocks taps on the buttons underneath. */
+  z-index: 25;
 }
 
 /* --------------------------------------------------------------------------

@@ -526,11 +526,29 @@ async function startAssistant() {
       videoEl: els.video,
       onHazard: handleHazard,
       onTrafficUpdate: handleTrafficUpdate,
-      onDetections: (boxes, vw, vh) => ar && ar.setDetectedObjects(boxes, vw, vh),
+      onDetections: (boxes, vw, vh) => {
+        ar && ar.setDetectedObjects(boxes, vw, vh);
+        // Live diagnostic readout, added after a real-device report that
+        // outlines weren't visible — this makes it immediately obvious
+        // on-screen whether the model is finding anything at all, versus
+        // a rendering problem, without needing dev tools.
+        const summary = boxes.length ? boxes.map((b) => b.label).join(',') : 'none in view';
+        ar && ar.setDebugInfo(`Hazard model: OK | objects: ${boxes.length} (${summary})`);
+      },
     });
     setStatus('Loading hazard detector…');
-    await hazards.load();
-    hazards.start(4);
+    try {
+      await hazards.load();
+      hazards.start(4);
+      ar && ar.setDebugInfo('Hazard model: OK | objects: 0 (none in view)');
+    } catch (err) {
+      console.error('Hazard model failed to load:', err);
+      ar && ar.setDebugInfo('Hazard model: FAILED TO LOAD — see console');
+      voice.speak(
+        'Obstacle detection could not start. Voice navigation still works, but there will be no hazard warnings or outlines this session.',
+        { key: 'hazard-load-failed', interrupt: true }
+      );
+    }
     setStatus('Say "Hey Nav" or tap mic');
   }
 }

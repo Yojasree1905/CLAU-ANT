@@ -137,6 +137,14 @@ class ArOverlay {
     this.bubbleText = null;
   }
 
+  /** Tiny always-visible debug line (bottom-left) so hazard-pipeline
+   * problems are visible on-screen instead of invisible failures — added
+   * after a real-device report of "no outlines visible" that couldn't be
+   * diagnosed from a synthetic test alone. */
+  setDebugInfo(text) {
+    this.debugInfo = text;
+  }
+
   /**
    * "Outlining AR" — live bounding boxes drawn around whatever the object
    * detector currently sees (people, vehicles, furniture), not just a
@@ -182,6 +190,10 @@ class ArOverlay {
 
     if (this.detectedObjects && this.detectedObjects.length) {
       this._drawDetectionOutlines(w, h);
+    }
+
+    if (this.debugInfo) {
+      this._drawDebugInfo(w, h);
     }
 
     if (this.targetBearing === null) {
@@ -276,6 +288,25 @@ class ArOverlay {
       ctx.textBaseline = 'alphabetic';
       ctx.restore();
     }
+  }
+
+  _drawDebugInfo(w, h) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '600 11px monospace';
+    const text = this.debugInfo;
+    const paddingX = 6;
+    const textW = ctx.measureText(text).width;
+    const boxH = 18;
+    const y = h - boxH - 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(6, y, textW + paddingX * 2, boxH);
+    ctx.fillStyle = '#0f0';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 6 + paddingX, y + boxH / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
   }
 
   _drawBubble(w, topOffset) {
