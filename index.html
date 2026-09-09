@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Voice Navigation Assistant</title>
+<title>NAV-AR — Augmented Reality Navigation</title>
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icons/icon-192.png" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
@@ -27,7 +27,7 @@
     </button>
 
     <div id="status-badge" role="status" aria-live="polite">
-      <span class="venue-indicator" id="current-venue-label">SJT — 7th Floor</span>
+      <span class="venue-indicator" id="current-venue-label">NAV-AR</span>
       <span class="status-sep">·</span>
       <span class="status-detail" id="status-text">Tap Start to begin</span>
     </div>
@@ -55,11 +55,11 @@
         <span>Repeat</span>
       </button>
 
-      <button id="next-leg-btn" class="pill-action-btn" aria-label="I've reached this point — advance to the next step" title="Use this if step-counting isn't advancing on your phone">
+      <button id="next-leg-btn" class="pill-action-btn" aria-label="GPS tracks position automatically">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="9 18 15 12 9 6"></polyline>
         </svg>
-        <span>Next</span>
+        <span>GPS Auto</span>
       </button>
 
       <button id="stop-btn" class="pill-action-btn pill-danger" aria-label="Stop navigation">
@@ -93,8 +93,8 @@
   <aside id="settings-sidebar" class="sidebar" role="dialog" aria-modal="true" aria-label="Settings and destinations">
     <div class="sidebar-header">
       <div class="sidebar-title-group">
-        <h2>Assistant Settings</h2>
-        <span class="sidebar-subtitle">Preferences & Venues</span>
+        <h2>NAV-AR Settings</h2>
+        <span class="sidebar-subtitle">Destinations & Preferences</span>
       </div>
       <button id="sidebar-close-btn" class="icon-btn close-btn" aria-label="Close settings">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -105,37 +105,76 @@
     </div>
 
     <div class="sidebar-content">
-      <!-- Section 1: Active Floor / Venue -->
-      <section class="sidebar-section">
-        <h3 class="section-heading">Active Venue / Floor</h3>
-        <p class="section-desc">You can also say <em>"Hey Nav, switch floor"</em> at any time.</p>
-        <div id="venue-picker" class="venue-cards" role="radiogroup" aria-label="Select venue floor">
-          <!-- Populated by JS -->
-        </div>
-      </section>
 
-      <!-- Section 2: Destinations Directory -->
+      <!-- Section 1: Nearby Destinations (map-driven) -->
       <section class="sidebar-section">
         <div class="section-header-row">
-          <h3 class="section-heading" id="dest-section-heading">Known Destinations</h3>
-          <span id="dest-count-badge" class="count-badge">0 places</span>
+          <h3 class="section-heading" id="dest-section-heading">Nearby Places</h3>
+          <span id="dest-count-badge" class="count-badge">Say a destination</span>
         </div>
-        <p class="section-desc" id="dest-section-desc">Or speak: <em>"Hey Nav, take me to [destination]"</em></p>
+        <p class="section-desc" id="dest-section-desc">
+          Say <em>"Hey Nav, take me to [any building or place name]"</em>
+          — or pick one below after starting the assistant.
+        </p>
         <div class="dest-search-wrap">
           <input type="text" id="dest-filter" placeholder="Filter places..." aria-label="Filter destinations" />
         </div>
-        <ul id="dest-list" class="dest-menu-list" role="listbox" aria-label="Destinations on this floor">
-          <!-- Populated by JS -->
+        <ul id="dest-list" class="dest-menu-list" role="listbox" aria-label="Nearby destinations">
+          <!-- Populated by JS after GPS & Overpass query -->
         </ul>
       </section>
 
-      <!-- Section 3: Voice & Audio Settings -->
+      <!-- Section 2: Routing Provider -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">Routing</h3>
+        <p class="section-desc">
+          OSRM works out-of-the-box (no key). ORS gives reliable walking directions.
+          Google Maps gives best coverage for Indian campuses but requires a billing-enabled key.
+        </p>
+        <div class="setting-item">
+          <label for="routing-provider-sel" class="setting-label">Routing Engine</label>
+          <select id="routing-provider-sel" style="width:100%; margin-top:6px; padding:8px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.05); color:inherit;">
+            <option value="osrm">OSRM (free, no key)</option>
+            <option value="ors">OpenRouteService (free key)</option>
+            <option value="gmaps">Google Maps (billing key)</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label for="ors-key-input" class="setting-label">ORS API Key</label>
+          <input type="password" id="ors-key-input" placeholder="(optional)" autocomplete="off"
+            style="width:100%; margin-top:6px; padding:8px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.05); color:inherit;" />
+        </div>
+        <div class="setting-item">
+          <label for="gmaps-key-input" class="setting-label">Google Maps API Key</label>
+          <input type="password" id="gmaps-key-input" placeholder="(optional)" autocomplete="off"
+            style="width:100%; margin-top:6px; padding:8px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.05); color:inherit;" />
+        </div>
+        <button id="save-routing-btn" class="pill-action-btn" style="margin-top:10px;">Save Routing Settings</button>
+      </section>
+
+      <!-- Section 3: AR Camera Calibration -->
+      <section class="sidebar-section">
+        <h3 class="section-heading">AR Camera Calibration</h3>
+        <p class="section-desc">
+          If AR arrows feel off horizontally, adjust the Camera FOV to match your phone's rear camera.
+          Most phones: 55–65°.
+        </p>
+        <div class="setting-item">
+          <div class="setting-label-wrap">
+            <label for="camera-fov-slider">Camera FOV (horizontal)</label>
+            <span id="camera-fov-val" class="setting-val">60°</span>
+          </div>
+          <input type="range" id="camera-fov-slider" min="40" max="90" step="1" value="60" />
+        </div>
+      </section>
+
+      <!-- Section 4: Voice & Audio Settings -->
       <section class="sidebar-section">
         <h3 class="section-heading">Voice & Audio</h3>
         <div class="setting-item">
           <div class="setting-label-wrap">
             <label for="voice-rate-slider">Voice Guidance Speed</label>
-            <span id="voice-rate-val" class="setting-val">1.0x</span>
+            <span id="voice-rate-val" class="setting-val">1.00×</span>
           </div>
           <input type="range" id="voice-rate-slider" min="0.8" max="1.4" step="0.05" value="1.0" />
         </div>
@@ -154,26 +193,13 @@
         <button id="test-voice-btn" class="secondary-btn">Test Spoken Guidance</button>
       </section>
 
-      <!-- Section 4: Walking Calibration -->
-      <section class="sidebar-section">
-        <h3 class="section-heading">Walking Calibration</h3>
-        <div class="setting-item">
-          <div class="setting-label-wrap">
-            <label for="stride-slider">Stride Length</label>
-            <span id="stride-val" class="setting-val">0.70 m</span>
-          </div>
-          <input type="range" id="stride-slider" min="0.5" max="1.0" step="0.02" value="0.70" />
-          <span class="setting-subtext">Used for step-counted dead reckoning indoors</span>
-        </div>
-      </section>
-
       <!-- Section 5: Obstacle Detection -->
       <section class="sidebar-section">
         <h3 class="section-heading">Hazard Detection</h3>
         <div class="setting-item toggle-row">
           <div>
             <span class="setting-label">Real-Time Obstacle Warnings</span>
-            <span class="setting-subtext">Alerts for people, chairs, tables, sofas, and vehicles</span>
+            <span class="setting-subtext">Alerts for people, chairs, tables, and vehicles</span>
           </div>
           <label class="switch">
             <input type="checkbox" id="hazard-toggle" checked />
@@ -182,63 +208,38 @@
         </div>
       </section>
 
-      <!-- Section: OpenAI Voice Assistant -->
+      <!-- Section 6: AI Voice Assistant -->
       <section class="sidebar-section">
         <h3 class="section-heading">AI Voice Assistant</h3>
         <p class="section-desc">
-          Powers "what's ahead", "how's the traffic", and "describe the scene". Your key is stored only on this device (browser localStorage) — it is never saved to any file or sent anywhere except OpenAI.
+          Powers "what's ahead", "how's the traffic", and "describe the scene".
+          Your key is stored only on this device (browser localStorage) — never saved to any file or sent anywhere except OpenAI.
         </p>
         <div class="setting-item">
           <label for="openai-key-input" class="setting-label">OpenAI API Key</label>
-          <input type="password" id="openai-key-input" placeholder="sk-..." style="width:100%; margin-top:6px; padding:8px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.05); color:inherit;" autocomplete="off" />
+          <input type="password" id="openai-key-input" placeholder="sk-..." autocomplete="off"
+            style="width:100%; margin-top:6px; padding:8px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.05); color:inherit;" />
         </div>
         <button id="save-openai-key-btn" class="pill-action-btn" style="margin-top:10px;">Save key</button>
         <span id="openai-key-status" class="setting-subtext" style="display:block; margin-top:6px;"></span>
       </section>
 
-      <!-- Section: Outdoor GPS Waypoint Calibration -->
-      <section class="sidebar-section" id="calibration-section" style="display:none;">
-        <h3 class="section-heading">Outdoor Calibration (optional)</h3>
-        <p class="section-desc">
-          Routing works to any destination via GPS + an open routing service, no calibration required. Capturing a hostel entrance here just makes THAT endpoint exact — more precise than a place-name search — coordinates are only ever set by physically standing there, never guessed.
-        </p>
-        <ul id="calibration-list" aria-label="Outdoor waypoints to calibrate"></ul>
-        <button id="export-calibration-btn" class="pill-action-btn" style="margin-top:10px;">Export calibration</button>
-        <textarea id="calibration-export-output" readonly style="display:none; width:100%; margin-top:8px; height:120px; font-family:monospace; font-size:12px;"></textarea>
-      </section>
-
-      <!-- Section 6: Spoken Voice Commands Reference -->
+      <!-- Section 7: Voice Commands Reference -->
       <section class="sidebar-section">
-        <h3 class="section-heading">Voice Commands Guide</h3>
-        <p class="section-desc">Speak naturally anytime using the <strong>"Hey Nav"</strong> wake phrase, or tap the mic button:</p>
+        <h3 class="section-heading">Voice Commands</h3>
+        <p class="section-desc">Speak naturally using the <strong>"Hey Nav"</strong> wake phrase, or tap the mic:</p>
         <div class="commands-grid">
           <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, take me to [place]"</span>
-            <span class="cmd-desc">Routes to destination</span>
-          </div>
-          <div class="cmd-item">
-            <span class="cmd-phrase">"Hey Nav, where is [place]"</span>
-            <span class="cmd-desc">Finds room or amenity</span>
+            <span class="cmd-desc">Routes to any named building or place</span>
           </div>
           <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, repeat"</span>
             <span class="cmd-desc">Replays last guidance</span>
           </div>
           <div class="cmd-item">
-            <span class="cmd-phrase">"Hey Nav, next"</span>
-            <span class="cmd-desc">Manually advance a step</span>
-          </div>
-          <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, where am I"</span>
-            <span class="cmd-desc">Reports current leg & distance</span>
-          </div>
-          <div class="cmd-item">
-            <span class="cmd-phrase">"Hey Nav, switch floor"</span>
-            <span class="cmd-desc">Cycles between venues</span>
-          </div>
-          <div class="cmd-item">
-            <span class="cmd-phrase">"Hey Nav, calibrate waypoints"</span>
-            <span class="cmd-desc">Opens outdoor calibration</span>
+            <span class="cmd-desc">Reports GPS position & distance</span>
           </div>
           <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, stop"</span>
@@ -247,6 +248,10 @@
           <div class="cmd-item">
             <span class="cmd-phrase">"Hey Nav, help"</span>
             <span class="cmd-desc">Spoken list of commands</span>
+          </div>
+          <div class="cmd-item">
+            <span class="cmd-phrase">"Hey Nav, what's ahead"</span>
+            <span class="cmd-desc">AI describes current scene (needs OpenAI key)</span>
           </div>
         </div>
       </section>
@@ -258,20 +263,29 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.20.0/tf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/coco-ssd/2.2.3/coco-ssd.min.js"></script>
 
+<!-- Core utilities (must be first) -->
 <script src="js/venue-graph.js"></script>
-<script src="js/venues/sjt-7th-floor.js"></script>
+<!-- Outdoor GPS anchor points (calibrated real coordinates) -->
 <script src="js/venues/outdoor-hostels.js"></script>
-<script src="js/gps-nav.js"></script>
+<!-- Map-based POI discovery (Overpass API + Nominatim) -->
+<script src="js/map-discovery.js"></script>
+<!-- Routing (OSRM / ORS / Google Maps) -->
 <script src="js/route-provider.js"></script>
-<script src="js/ai-assistant.js"></script>
-<script src="js/venues/hblock-3rd-floor.js"></script>
+<!-- GPS position tracker -->
+<script src="js/gps-nav.js"></script>
+<!-- Visual localizer (camera-based location hints) -->
 <script src="js/localization.js"></script>
-<script src="js/venues/sjt-7th-floor.fingerprints.js"></script>
-<script src="js/venues/hblock-3rd-floor.fingerprints.js"></script>
+<!-- Voice IO (wake word, TTS, speech recognition) -->
 <script src="js/voice.js"></script>
+<!-- AR canvas overlay (GPS route projection + hazard outlines) -->
 <script src="js/ar.js"></script>
+<!-- Hazard detector (COCO-SSD, on-device) -->
 <script src="js/hazards.js"></script>
+<!-- OpenAI AI assistant layer -->
+<script src="js/ai-assistant.js"></script>
+<!-- App controller -->
 <script src="js/app.js"></script>
+
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {

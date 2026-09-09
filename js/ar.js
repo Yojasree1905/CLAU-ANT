@@ -1,169 +1,218 @@
 /**
  * ar.js
  * -----------------------------------------------------------------------
- * Two things get drawn on the AR canvas over the live camera feed:
+ * Three things drawn on the AR canvas over the live camera feed:
  *
- * 1. A ground-style guidance path: a tapered shape sitting low in the
- *    frame that curves left/right toward the next turn, with chevrons
- *    flowing along it, plus a distance readout. This is a heading-locked
- *    illusion, not true world-locked AR — it doesn't track the real floor
- *    plane, so there's no depth sensing or SLAM involved. That's
- *    deliberate: real plane-tracked AR needs WebXR hit-testing (Chrome +
- *    ARCore on Android only, not Safari/iPhone), which would break this
- *    app on half of phones. This version works on any phone with a
- *    compass, matching the project's "no special hardware" design.
+ * 1. ROUTE PROJECTION — the primary new feature.
+ *    Each point of the real GPS route polyline (from route-provider.js)
+ *    is projected to its correct position in the camera frame using the
+ *    phone's compass heading and GPS position. This gives a transparent
+ *    arrow corridor that literally follows the road as it curves in front
+ *    of you, not just a synthetic shape based only on the next bearing.
+ *    Maths: bearing + haversine distance → relative screen angle →
+ *    perspective-corrected (x, y) on canvas.
  *
- * 2. A landmark "bubble" — a small pill near the top of the screen naming
- *    whatever place the ambient visual-recognition system (localization.js)
- *    currently believes is in view, independent of the nav destination.
+ * 2. OUTLINING AR — live bounding boxes around detected hazards from
+ *    hazards.js (person, vehicle, obstacle), colour-coded by urgency.
  *
- * iOS requires an explicit user gesture to grant orientation permission
- * (DeviceOrientationEvent.requestPermission()) — call
- * ArOverlay.requestPermission() from a tap handler before start().
+ * 3. LANDMARK BUBBLE — "You might be near X" pill from localization.js.
+ *
+ * Platform notes:
+ *   - Canvas 2D only — no WebGL, no WebXR.
+ *   - WebXR / plane-tracked AR only works on ARCore Android + Chrome,
+ *     not iPhones — this approach works everywhere.
+ *   - iOS needs an explicit user gesture before DeviceOrientationEvent
+ *     fires; call ArOverlay.requestPermission() from a tap handler.
+ *   - If the compass never delivers a reading (concrete buildings can
+ *     scramble magnetometers), the overlay draws the path straight ahead
+ *     with a visible notice rather than showing nothing.
  * -----------------------------------------------------------------------
  */
+
+// Default camera FOV — most phone rear cameras are 55–65° horizontal.
+// Configurable via Settings so users can tune for their device.
+const DEFAULT_FOV_H = 60; // degrees, horizontal
+const DEFAULT_FOV_V = 45; // degrees, vertical
+
+// How far ahead to project route points (metres). Beyond this they're
+// near the horizon and not useful to draw individually.
+const MAX_PROJ_DIST = 120;
+
+// Minimum separation between drawn distance markers (screen pixels)
+const MIN_MARKER_GAP_PX = 60;
 
 class ArOverlay {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.heading = null; // degrees, 0 = north; null until a real sensor reading arrives
-    this.hasLiveHeading = false; // true once at least one real orientation event has arrived
-    this.targetBearing = null;
-    this.distanceRemaining = null;
-    this.destinationLabel = '';
+
+    // Compass / orientation
+    this.heading = null;
+    this.hasLiveHeading = false;
+
+    // Route data (set by app.js on each GPS update)
+    this._routePolyline = null;   // [[lat,lon], ...]
+    this._currentLat = null;
+    this._currentLon = null;
+    this._destLabel = '';
+    this._distanceRemaining = null;
+
+    // Hazard outlines
+    this.detectedObjects = [];
+    this.detectedVideoSize = { w: 1, h: 1 };
+
+    // Ambient landmark bubble
     this.bubbleText = null;
+
+    // Debug overlay
+    this.debugInfo = null;
+
+    // Animation
     this.dpr = window.devicePixelRatio || 1;
-    this._reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this._reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     this._flowPhase = 0;
-    this._startedAt = null;
+
+    // Camera FOV (configurable)
+    this.fovH = DEFAULT_FOV_H;
+    this.fovV = DEFAULT_FOV_V;
+
     this._onOrientation = this._onOrientation.bind(this);
   }
 
-  setDpr(dpr) {
-    this.dpr = dpr;
-  }
+  // ------------------------------------------------------------------
+  // Public API
+  // ------------------------------------------------------------------
+
+  setDpr(dpr) { this.dpr = dpr; }
+  setFov(h, v) { this.fovH = h || DEFAULT_FOV_H; this.fovV = v || DEFAULT_FOV_V; }
 
   static async requestPermission() {
     if (typeof DeviceOrientationEvent !== 'undefined' &&
         typeof DeviceOrientationEvent.requestPermission === 'function') {
       try {
-        const state = await DeviceOrientationEvent.requestPermission();
-        return state === 'granted';
-      } catch (_) {
-        return false;
-      }
+        return (await DeviceOrientationEvent.requestPermission()) === 'granted';
+      } catch (_) { return false; }
     }
-    return true; // Android / desktop don't require explicit permission
+    return true;
   }
 
   start() {
     window.addEventListener('deviceorientationabsolute', this._onOrientation, true);
     window.addEventListener('deviceorientation', this._onOrientation, true);
-    this._startedAt = Date.now();
     this._raf();
   }
 
   stop() {
     window.removeEventListener('deviceorientationabsolute', this._onOrientation, true);
     window.removeEventListener('deviceorientation', this._onOrientation, true);
-    if (this._raf_id) cancelAnimationFrame(this._raf_id);
-  }
-
-  _onOrientation(e) {
-    // webkitCompassHeading (iOS Safari) is already 0=north, clockwise-positive.
-    if (typeof e.webkitCompassHeading === 'number') {
-      this.heading = e.webkitCompassHeading;
-      this.hasLiveHeading = true;
-    } else if (e.alpha !== null) {
-      // 'alpha' increases counter-clockwise from device's initial orientation;
-      // absolute=true + screen orientation 0 gives a usable compass proxy.
-      this.heading = (360 - e.alpha) % 360;
-      this.hasLiveHeading = true;
-    }
-    // If alpha is null, this event fired but carried no usable reading —
-    // common on phones without a working magnetometer, or where indoor
-    // metal/rebar has scrambled the compass. We deliberately do NOT set
-    // hasLiveHeading here, so _effectiveHeading() below keeps using the
-    // straight-ahead fallback instead of trusting a reading that never came.
+    if (this._rafId) cancelAnimationFrame(this._rafId);
   }
 
   /**
-   * Real device heading if we have one; otherwise a synthetic "assume
-   * you're already facing the target" heading, so the ground path always
-   * renders something instead of silently drawing nothing forever. This
-   * was a real bug found via on-device screenshots: several Android
-   * phones never fire a usable deviceorientation reading indoors (compass
-   * confused by structural steel/rebar), and the arrow overlay used to
-   * just never appear in that case — which looked exactly like "the
-   * arrows aren't implemented" even though the rendering code was fine.
+   * Set the full route polyline + current GPS position.
+   * Called by app.js on every GPS update while navigating.
+   *
+   * @param {Array} polyline  [[lat,lon], ...] — the full route from routing engine
+   * @param {number} lat      current GPS latitude
+   * @param {number} lon      current GPS longitude
+   * @param {string} destLabel  destination name for the label
+   * @param {number} distanceRemaining  metres remaining to destination
    */
-  _effectiveHeading() {
-    if (this.hasLiveHeading) return this.heading;
-    if (this.targetBearing === null) return null;
-    return this.targetBearing; // relative bearing 0 == "draw it straight ahead"
+  setRoute(polyline, lat, lon, destLabel, distanceRemaining) {
+    this._routePolyline = polyline && polyline.length > 1 ? polyline : null;
+    this._currentLat = lat;
+    this._currentLon = lon;
+    this._destLabel = destLabel || '';
+    this._distanceRemaining = distanceRemaining;
   }
 
+  clearRoute() {
+    this._routePolyline = null;
+    this._currentLat = null;
+    this._currentLon = null;
+    this._destLabel = '';
+    this._distanceRemaining = null;
+  }
+
+  // Legacy API — kept so existing code that calls setTarget()/setPath()
+  // keeps working while we transition.
   setTarget(bearingDeg, distanceMeters, label) {
-    this.setPath([{ bearing: bearingDeg, distance: distanceMeters }], distanceMeters, label);
+    this._legacyBearing = bearingDeg;
+    this._legacyDist = distanceMeters;
+    this._legacyLabel = label;
+    // If no real route polyline is loaded, fall back to the old synthetic path
+    if (!this._routePolyline) {
+      this._legacyMode = true;
+    }
   }
 
-  /**
-   * Multi-point version: points is an array of {bearing, distance} pairs
-   * (absolute compass bearing in degrees, distance in meters), nearest
-   * first, for several upcoming stops along the actual route — not just
-   * the very next one. This is what makes the rendered path curve like
-   * the real road instead of always drawing a single straight-ish shape:
-   * each point gets projected to screen space based on its own bearing
-   * and distance, and a smooth curve is traced through all of them.
-   */
-  setPath(points, totalDistanceRemaining, label) {
-    this.pathPoints = points && points.length ? points : null;
-    this.targetBearing = this.pathPoints ? this.pathPoints[0].bearing : null;
-    this.distanceRemaining = totalDistanceRemaining;
-    this.destinationLabel = label;
+  setPath(points, totalDist, label) {
+    this._legacyPoints = points;
+    this._legacyDist = totalDist;
+    this._legacyLabel = label;
+    if (!this._routePolyline) this._legacyMode = true;
   }
 
   clearTarget() {
-    this.targetBearing = null;
-    this.pathPoints = null;
+    this._routePolyline = null;
+    this._legacyMode = false;
+    this._legacyBearing = null;
+    this._legacyPoints = null;
   }
 
-  showBubble(text) {
-    this.bubbleText = text;
-  }
+  showBubble(text)   { this.bubbleText = text; }
+  clearBubble()      { this.bubbleText = null; }
+  setDebugInfo(text) { this.debugInfo = text; }
 
-  clearBubble() {
-    this.bubbleText = null;
-  }
-
-  /** Tiny always-visible debug line (bottom-left) so hazard-pipeline
-   * problems are visible on-screen instead of invisible failures — added
-   * after a real-device report of "no outlines visible" that couldn't be
-   * diagnosed from a synthetic test alone. */
-  setDebugInfo(text) {
-    this.debugInfo = text;
-  }
-
-  /**
-   * "Outlining AR" — live bounding boxes drawn around whatever the object
-   * detector currently sees (people, vehicles, furniture), not just a
-   * voice announcement for the single nearest one. `boxes` uses native
-   * video pixel coordinates; videoWidth/videoHeight are the video
-   * element's actual resolution, needed to correctly map onto the canvas
-   * given the video is displayed with CSS `object-fit: cover` (scaled up
-   * and center-cropped to fill the screen, not shown at native size).
-   */
   setDetectedObjects(boxes, videoWidth, videoHeight) {
     this.detectedObjects = boxes || [];
     this.detectedVideoSize = { w: videoWidth, h: videoHeight };
   }
 
+  // ------------------------------------------------------------------
+  // Orientation
+  // ------------------------------------------------------------------
+
+  _onOrientation(e) {
+    if (typeof e.webkitCompassHeading === 'number') {
+      this.heading = e.webkitCompassHeading;
+      this.hasLiveHeading = true;
+    } else if (e.alpha !== null) {
+      this.heading = (360 - e.alpha) % 360;
+      this.hasLiveHeading = true;
+    }
+  }
+
+  _effectiveHeading() {
+    if (this.hasLiveHeading) return this.heading;
+    // No compass — synthesise "you're facing the destination" so the
+    // overlay still shows something useful rather than nothing.
+    if (this._routePolyline && this._currentLat !== null) {
+      // Use bearing to the nearest upcoming route point as the heading
+      const nearest = this._nearestRoutePoint();
+      if (nearest) {
+        return _initialBearing(
+          this._currentLat, this._currentLon,
+          nearest[0], nearest[1]
+        );
+      }
+    }
+    return this._legacyBearing ?? null;
+  }
+
+  // ------------------------------------------------------------------
+  // Animation loop
+  // ------------------------------------------------------------------
+
   _raf() {
     this._draw();
     if (!this._reducedMotion) this._flowPhase = (this._flowPhase + 0.015) % 1;
-    this._raf_id = requestAnimationFrame(() => this._raf());
+    this._rafId = requestAnimationFrame(() => this._raf());
   }
+
+  // ------------------------------------------------------------------
+  // Main draw
+  // ------------------------------------------------------------------
 
   _draw() {
     const { ctx, canvas } = this;
@@ -175,70 +224,353 @@ class ArOverlay {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
 
-    // Vertical space actually available for drawing, between the top bar
-    // and the bottom voice hub, so nothing we draw sits under either.
-    const topOffset = (document.getElementById('top-bar')?.offsetHeight || 64) + 10;
-    const bottomOffset = (document.getElementById('voice-hub')?.offsetHeight || 130) + 10;
+    const topOffset  = (document.getElementById('top-bar')?.offsetHeight  || 64) + 10;
+    const botOffset  = (document.getElementById('voice-hub')?.offsetHeight || 130) + 10;
 
-    // Stack bubble -> distance label -> ground path top-to-bottom with
-    // fixed gaps, so they never overlap regardless of screen size.
     let contentTop = topOffset;
+
+    // 1. Ambient landmark bubble
     if (this.bubbleText) {
       this._drawBubble(w, contentTop);
-      contentTop += 34 + 14; // bubble height + gap
+      contentTop += 48;
     }
 
-    if (this.detectedObjects && this.detectedObjects.length) {
+    // 2. Hazard bounding boxes
+    if (this.detectedObjects?.length) {
       this._drawDetectionOutlines(w, h);
     }
 
+    // 3. Debug info
     if (this.debugInfo) {
       this._drawDebugInfo(w, h);
     }
 
-    if (this.targetBearing === null) {
-      ctx.restore();
-      return;
-    }
     const heading = this._effectiveHeading();
-    if (heading === null) {
+
+    // 4. Route projection (new GPS-based system)
+    const hasRoute = this._routePolyline && this._currentLat !== null;
+    if (hasRoute) {
+      const compassFallback = !this.hasLiveHeading;
+      if (compassFallback) this._drawCompassFallbackNotice(w, contentTop);
+      this._drawRouteProjection(heading, w, h, contentTop, botOffset);
+      this._drawNavLabel(w, contentTop + (compassFallback ? 22 : 0), botOffset);
       ctx.restore();
       return;
     }
 
-    let rel = this.targetBearing - heading;
-    rel = ((rel + 540) % 360) - 180; // -180..180, 0 = straight ahead; drives the turn-around check below
+    // 5. Legacy mode — old bearing-only synthetic path (fallback while
+    //    there's no route polyline loaded)
+    const lPoints = this._legacyPoints;
+    const lBearing = this._legacyBearing;
+    if (!lPoints && lBearing === null) { ctx.restore(); return; }
+    if (heading === null)               { ctx.restore(); return; }
+
+    const firstBearing = lPoints ? lPoints[0].bearing : lBearing;
+    let rel = firstBearing - heading;
+    rel = ((rel + 540) % 360) - 180;
 
     const labelTop = contentTop;
-    let pathTop = labelTop + 52 + 16; // label height + gap
+    let pathTop = labelTop + 52 + 16;
     if (!this.hasLiveHeading) {
       this._drawCompassFallbackNotice(w, pathTop);
       pathTop += 26;
     }
-
-    // Beyond ~70deg the nearest point is essentially behind you — a
-    // curving ground path can't sensibly represent that, so show a
-    // turn-around badge instead of a stretched-out arrow.
     if (Math.abs(rel) > 70) {
-      this._drawTurnAround(rel, w, h, pathTop, bottomOffset);
-      this._drawLabel(w, labelTop);
-      ctx.restore();
-      return;
+      this._drawTurnAround(rel, w, h, pathTop, botOffset);
+      this._drawLabel(w, labelTop, this._legacyLabel, this._legacyDist);
+    } else {
+      this._drawCurvingPath(heading, w, h, pathTop, botOffset, lPoints || [{ bearing: lBearing, distance: lBearing ?? 10 }]);
+      this._drawLabel(w, labelTop, this._legacyLabel, this._legacyDist);
     }
 
-    this._drawCurvingPath(heading, w, h, pathTop, bottomOffset);
-    this._drawLabel(w, labelTop);
     ctx.restore();
   }
 
+  // ------------------------------------------------------------------
+  // GPS → Screen projection  (the core new rendering)
+  // ------------------------------------------------------------------
+
   /**
-   * Maps native video pixel coordinates onto canvas/screen coordinates,
-   * accounting for the video being displayed with CSS `object-fit: cover`
-   * — scaled up and center-cropped to fill the screen rather than shown
-   * at its native resolution. Standard "cover" mapping: scale by
-   * whichever axis needs to grow more to fully cover the container, then
-   * center the overflow.
+   * Projects each upcoming point of the GPS route polyline onto the
+   * camera canvas using compass heading + haversine geometry.
+   *
+   * Coordinate system:
+   *   - relativeBearing (−180..+180): negative = left of camera centre,
+   *     positive = right
+   *   - Distance drives vertical position: close = bottom, far = horizon
    */
+  _drawRouteProjection(heading, w, h, topOffset, botOffset) {
+    const { ctx } = this;
+    if (!this._routePolyline || this._currentLat === null) return;
+
+    const nearestIdx = this._nearestRouteIndex();
+    const usableHeading = heading ?? _initialBearing(
+      this._currentLat, this._currentLon,
+      this._routePolyline[nearestIdx]?.[0] ?? this._currentLat,
+      this._routePolyline[nearestIdx]?.[1] ?? this._currentLon
+    );
+
+    // Collect upcoming route points (from nearest forward)
+    const MAX_POINTS = 20;
+    const projected = [];
+    let totalDist = 0;
+
+    for (let i = nearestIdx; i < this._routePolyline.length && projected.length < MAX_POINTS; i++) {
+      const [pLat, pLon] = this._routePolyline[i];
+      const dist = _haversine(this._currentLat, this._currentLon, pLat, pLon);
+      if (dist > MAX_PROJ_DIST) break;
+
+      let rel = _initialBearing(this._currentLat, this._currentLon, pLat, pLon) - usableHeading;
+      rel = ((rel + 540) % 360) - 180; // −180..+180
+
+      const screen = this._gpsToScreen(rel, dist, w, h, topOffset, botOffset);
+      if (!screen) continue;
+
+      projected.push({ ...screen, dist, idx: i });
+      totalDist = dist;
+    }
+
+    if (projected.length < 1) return;
+
+    // Add "your feet" as anchor at bottom-centre
+    const footY = h - botOffset - 10;
+    const anchor = { x: w / 2, y: footY, halfW: w * 0.22 };
+
+    // ---- Draw corridor fill ----
+    this._drawCorridorFill(ctx, anchor, projected, w, footY);
+
+    // ---- Draw animated chevrons along corridor centreline ----
+    const centreLine = [{ x: anchor.x, y: anchor.y }, ...projected.map((p) => ({ x: p.x, y: p.y }))];
+    this._drawFlowingChevrons(ctx, centreLine, projected, anchor);
+
+    // ---- Draw turn indicators at sharp bends ----
+    this._drawTurnIndicators(ctx, projected);
+
+    // ---- Draw distance markers ----
+    this._drawDistanceMarkers(ctx, projected);
+
+    // ---- Destination pin at far end ----
+    if (this._destLabel && projected.length) {
+      const tip = projected[projected.length - 1];
+      this._drawDestinationPin(ctx, tip.x, tip.y, this._destLabel);
+    }
+  }
+
+  /**
+   * Projects a point (relativeBearing degrees, distance metres) to
+   * canvas (x, y) coordinates using a perspective ground-plane model.
+   * Returns null if the point is outside the camera's horizontal FOV.
+   */
+  _gpsToScreen(relBearingDeg, distMeters, w, h, topOffset, botOffset) {
+    const halfFovH = this.fovH / 2;
+
+    // Clip to camera FOV — points more than halfFovH left or right
+    // are literally off-screen
+    if (Math.abs(relBearingDeg) > halfFovH * 1.1) return null;
+
+    // Horizontal: linear mapping of relative bearing to screen x
+    const x = w / 2 + (relBearingDeg / halfFovH) * (w / 2);
+
+    // Vertical: perspective ground-plane projection.
+    // Close objects appear at the bottom; far objects approach the horizon.
+    // Horizon line ≈ middle of the usable vertical space.
+    const usableH = h - topOffset - botOffset;
+    const horizonY = topOffset + usableH * 0.42;  // horizon at ~42% from top
+    const footY    = h - botOffset - 10;           // "your feet" at bottom
+
+    // Perspective factor: as distance → ∞, t → 1 (at horizon).
+    // sqrt gives nicer compression for medium distances.
+    const t = Math.min(1, Math.sqrt(distMeters / MAX_PROJ_DIST));
+    const y = footY - t * (footY - horizonY);
+
+    // Corridor half-width: wide at bottom, narrow at horizon (perspective)
+    const halfW = (w * 0.22) * (1 - t * 0.88) + (w * 0.02) * t;
+
+    return { x, y, halfW };
+  }
+
+  _drawCorridorFill(ctx, anchor, projected, w, footY) {
+    if (!projected.length) return;
+
+    // Build left + right edges of the corridor
+    const leftPts  = [{ x: anchor.x - anchor.halfW, y: anchor.y }];
+    const rightPts = [{ x: anchor.x + anchor.halfW, y: anchor.y }];
+
+    for (const p of projected) {
+      leftPts.push({ x: p.x - p.halfW, y: p.y });
+      rightPts.push({ x: p.x + p.halfW, y: p.y });
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    _traceSmooth(ctx, leftPts, false);
+    _traceSmooth(ctx, [...rightPts].reverse(), true);
+    ctx.closePath();
+
+    // Colour gradient: teal at bottom → transparent at top
+    const grad = ctx.createLinearGradient(0, anchor.y, 0, projected[projected.length - 1].y);
+    grad.addColorStop(0, 'rgba(0, 200, 180, 0.70)');
+    grad.addColorStop(0.5, 'rgba(0, 160, 220, 0.45)');
+    grad.addColorStop(1, 'rgba(0, 120, 255, 0.10)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Edge outline
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  _drawFlowingChevrons(ctx, centreLine, projected, anchor) {
+    const CHEVRON_COUNT = 5;
+    for (let i = 0; i < CHEVRON_COUNT; i++) {
+      const p = (i / CHEVRON_COUNT + this._flowPhase) % 1;
+      const pt = _pointOnPolyline(centreLine, p);
+      // Width scales with position along path (wide at bottom, narrow at top)
+      const w = anchor.halfW * (1 - p * 0.8) + (projected[projected.length - 1]?.halfW || 8) * p;
+      _drawChevron(ctx, pt.x, pt.y, pt.angle, w * 1.4, 'rgba(255,255,255,0.85)');
+    }
+  }
+
+  _drawTurnIndicators(ctx, projected) {
+    for (let i = 1; i < projected.length - 1; i++) {
+      const prev = projected[i - 1];
+      const curr = projected[i];
+      const dx1 = curr.x - prev.x;
+      const dy1 = curr.y - prev.y;
+      const dx2 = (projected[i + 1]?.x ?? curr.x) - curr.x;
+      const dy2 = (projected[i + 1]?.y ?? curr.y) - curr.y;
+
+      // Cross product to detect bend direction
+      const cross = dx1 * dy2 - dy1 * dx2;
+      const len1 = Math.sqrt(dx1 ** 2 + dy1 ** 2);
+      const len2 = Math.sqrt(dx2 ** 2 + dy2 ** 2);
+      if (len1 < 5 || len2 < 5) continue;
+
+      // Dot product → angle between segments
+      const dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2);
+      const angleDeg = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+
+      if (angleDeg > 25) { // meaningful turn
+        const side = cross > 0 ? 'right' : 'left';
+        this._drawTurnArrow(ctx, curr.x, curr.y, side, angleDeg);
+      }
+    }
+  }
+
+  _drawTurnArrow(ctx, x, y, side, angleDeg) {
+    const label = angleDeg > 80
+      ? (side === 'right' ? '↱' : '↰')
+      : (side === 'right' ? '→' : '←');
+    ctx.save();
+    ctx.font = 'bold 20px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Pill background
+    const tw = ctx.measureText(label).width + 16;
+    const th = 26;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    _roundRect(ctx, x - tw / 2, y - th / 2, tw, th, 6);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(255, 220, 0, 0.95)';
+    ctx.fillText(label, x, y + 1);
+    ctx.restore();
+  }
+
+  _drawDistanceMarkers(ctx, projected) {
+    const intervals = [10, 20, 50, 100]; // metres
+    let lastMarkerY = Infinity;
+
+    for (const p of projected) {
+      // Find the best interval for this distance
+      const interval = intervals.find((iv) => Math.abs(p.dist % iv) < iv * 0.25);
+      if (!interval) continue;
+      if (Math.abs(lastMarkerY - p.y) < MIN_MARKER_GAP_PX) continue;
+
+      const label = p.dist < 100
+        ? `${Math.round(p.dist)} m`
+        : `${(p.dist / 1000).toFixed(1)} km`;
+
+      ctx.save();
+      ctx.font = '600 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(label).width + 12;
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      _roundRect(ctx, p.x - tw / 2, p.y - 10, tw, 20, 4);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillText(label, p.x, p.y);
+      ctx.restore();
+
+      lastMarkerY = p.y;
+    }
+  }
+
+  _drawDestinationPin(ctx, x, y, label) {
+    ctx.save();
+    ctx.font = '600 13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(label).width + 16;
+    const th = 26;
+
+    // Drop shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 6;
+
+    ctx.fillStyle = 'rgba(220, 60, 30, 0.92)';
+    _roundRect(ctx, x - tw / 2, y - th - 8, tw, th, 6);
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, x, y - th / 2 - 8 + 1);
+    ctx.restore();
+  }
+
+  _drawNavLabel(w, topY, botOffset) {
+    if (!this._distanceRemaining && !this._destLabel) return;
+    const { ctx } = this;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(0, topY, w, 50);
+    ctx.fillStyle = '#fff';
+    ctx.font = '600 18px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    const distText = this._distanceRemaining != null
+      ? `  ${this._distanceRemaining.toFixed(0)} m`
+      : '';
+    ctx.fillText(`${this._destLabel}${distText}`, w / 2, topY + 32);
+  }
+
+  // ------------------------------------------------------------------
+  // Nearest route point helpers
+  // ------------------------------------------------------------------
+
+  _nearestRouteIndex() {
+    if (!this._routePolyline || this._currentLat === null) return 0;
+    let minDist = Infinity, minIdx = 0;
+    for (let i = 0; i < this._routePolyline.length; i++) {
+      const d = _haversine(this._currentLat, this._currentLon, ...this._routePolyline[i]);
+      if (d < minDist) { minDist = d; minIdx = i; }
+    }
+    // Advance past the very nearest point so the corridor starts *ahead*
+    return Math.min(minIdx + 1, this._routePolyline.length - 1);
+  }
+
+  _nearestRoutePoint() {
+    const idx = this._nearestRouteIndex();
+    return this._routePolyline?.[idx] ?? null;
+  }
+
+  // ------------------------------------------------------------------
+  // Hazard bounding boxes (unchanged from original)
+  // ------------------------------------------------------------------
+
   _videoToCanvas(x, y, canvasW, canvasH) {
     const { w: vw, h: vh } = this.detectedVideoSize;
     const scale = Math.max(canvasW / vw, canvasH / vh);
@@ -253,61 +585,43 @@ class ArOverlay {
     const { ctx } = this;
     const ZONE_STYLE = {
       critical: { color: 'rgba(220, 60, 60, 0.95)', lineWidth: 3 },
-      near: { color: 'rgba(230, 170, 40, 0.9)', lineWidth: 2.5 },
-      mid: { color: 'rgba(110, 200, 140, 0.75)', lineWidth: 2 },
-      far: { color: 'rgba(180, 180, 180, 0.5)', lineWidth: 1.5 },
+      near:     { color: 'rgba(230, 170, 40, 0.90)', lineWidth: 2.5 },
+      mid:      { color: 'rgba(110, 200, 140, 0.75)', lineWidth: 2 },
+      far:      { color: 'rgba(180, 180, 180, 0.50)', lineWidth: 1.5 },
     };
 
     for (const obj of this.detectedObjects) {
       const [bx, by, bw, bh] = obj.bbox;
-      const topLeft = this._videoToCanvas(bx, by, w, h);
-      const bottomRight = this._videoToCanvas(bx + bw, by + bh, w, h);
-      const boxW = bottomRight.x - topLeft.x;
-      const boxH = bottomRight.y - topLeft.y;
+      const tl = this._videoToCanvas(bx, by, w, h);
+      const br = this._videoToCanvas(bx + bw, by + bh, w, h);
+      const boxW = br.x - tl.x;
+      const boxH = br.y - tl.y;
       const style = ZONE_STYLE[obj.zone] || ZONE_STYLE.far;
 
       ctx.save();
       ctx.strokeStyle = style.color;
       ctx.lineWidth = style.lineWidth;
-      ctx.strokeRect(topLeft.x, topLeft.y, boxW, boxH);
+      ctx.strokeRect(tl.x, tl.y, boxW, boxH);
 
-      // Label chip above the box
       ctx.font = '600 13px system-ui, sans-serif';
-      const labelText = obj.label;
-      const paddingX = 6;
-      const textW = ctx.measureText(labelText).width;
-      const chipW = textW + paddingX * 2;
+      const tw = ctx.measureText(obj.label).width;
+      const chipW = tw + 12;
       const chipH = 20;
-      const chipY = Math.max(topLeft.y - chipH, 0);
+      const chipY = Math.max(tl.y - chipH, 0);
       ctx.fillStyle = style.color;
-      ctx.fillRect(topLeft.x, chipY, chipW, chipH);
+      ctx.fillRect(tl.x, chipY, chipW, chipH);
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(labelText, topLeft.x + paddingX, chipY + chipH / 2 + 1);
+      ctx.fillText(obj.label, tl.x + 6, chipY + chipH / 2 + 1);
       ctx.textBaseline = 'alphabetic';
       ctx.restore();
     }
   }
 
-  _drawDebugInfo(w, h) {
-    const { ctx } = this;
-    ctx.save();
-    ctx.font = '600 11px monospace';
-    const text = this.debugInfo;
-    const paddingX = 6;
-    const textW = ctx.measureText(text).width;
-    const boxH = 18;
-    const y = h - boxH - 8;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(6, y, textW + paddingX * 2, boxH);
-    ctx.fillStyle = '#0f0';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, 6 + paddingX, y + boxH / 2 + 1);
-    ctx.textBaseline = 'alphabetic';
-    ctx.restore();
-  }
+  // ------------------------------------------------------------------
+  // Shared / utility draw helpers
+  // ------------------------------------------------------------------
 
   _drawBubble(w, topOffset) {
     const { ctx } = this;
@@ -328,12 +642,11 @@ class ArOverlay {
     ctx.arcTo(bx, by + bubbleH, bx, by, r);
     ctx.arcTo(bx, by, bx + bubbleW, by, r);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.85)'; // distinct blue — never confused with the red/amber hazard/turn colors
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.85)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.4)';
     ctx.lineWidth = 1;
     ctx.stroke();
-
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -342,58 +655,68 @@ class ArOverlay {
     ctx.restore();
   }
 
-  /**
-   * Projects each upcoming route point into screen space based on its own
-   * bearing (relative to current heading) and distance, then traces a
-   * smooth curve through all of them — this is what makes the path bend
-   * like the real road shape instead of a single left/right lean. Nearer
-   * points sit low and wide on screen; farther points sit higher and
-   * narrower, approximating perspective without real depth data.
-   */
-  _drawCurvingPath(heading, w, h, pathTop, bottomOffset) {
+  _drawCompassFallbackNotice(w, y) {
     const { ctx } = this;
-    const points = this.pathPoints;
-    const bottomY = h - bottomOffset - 20;
-    const topY = pathTop + (bottomY - pathTop) * 0.15;
-    const bottomHalfW = w * 0.24;
-    const topHalfW = w * 0.05;
+    ctx.save();
+    ctx.font = '600 13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(217,154,43,0.9)';
+    ctx.fillText('No compass — showing straight-ahead path', w / 2, y);
+    ctx.restore();
+  }
 
-    const maxDist = Math.max(...points.map((p) => p.distance), 1);
+  _drawDebugInfo(w, h) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '600 11px monospace';
+    const text = this.debugInfo;
+    const tw = ctx.measureText(text).width;
+    const boxH = 18;
+    const y = h - boxH - 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(6, y, tw + 12, boxH);
+    ctx.fillStyle = '#0f0';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 12, y + boxH / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+  }
+
+  // ------------------------------------------------------------------
+  // Legacy synthetic path (bearing-only, used if no GPS route loaded)
+  // ------------------------------------------------------------------
+
+  _drawCurvingPath(heading, w, h, pathTop, bottomOffset, points) {
+    const { ctx } = this;
+    const bottomY = h - bottomOffset - 20;
+    const topY    = pathTop + (bottomY - pathTop) * 0.15;
+    const bottomHalfW = w * 0.24;
+    const topHalfW    = w * 0.05;
+    const maxDist = Math.max(...points.map((p) => p.distance || p.dist || 10), 1);
+
     const projected = points.map((p) => {
-      let rel = p.bearing - heading;
+      let rel = (p.bearing - heading);
       rel = ((rel + 540) % 360) - 180;
-      const clampedRel = Math.max(-85, Math.min(85, rel));
-      // sqrt compresses farther points so they don't all crowd near the
-      // top when the lookahead spans a wide range of distances.
-      const t = Math.min(1, Math.sqrt(p.distance / maxDist));
-      return { rel: clampedRel, t };
+      const t = Math.min(1, Math.sqrt((p.distance || p.dist || 10) / maxDist));
+      return { rel: Math.max(-85, Math.min(85, rel)), t };
     });
 
-    const screenPoint = ({ rel, t }) => {
-      const y = bottomY - t * (bottomY - topY);
-      const lateralSpread = w * 0.3 * (1 - t * 0.25);
-      const x = w / 2 + (rel / 85) * lateralSpread;
-      const halfWidth = bottomHalfW * (1 - t) + topHalfW * t;
-      return { x, y, halfWidth };
-    };
+    const screenPoint = ({ rel, t }) => ({
+      x: w / 2 + (rel / 85) * w * 0.3 * (1 - t * 0.25),
+      y: bottomY - t * (bottomY - topY),
+      halfWidth: bottomHalfW * (1 - t) + topHalfW * t,
+    });
 
-    // The user's own position anchors the bottom of the path, always
-    // dead-center — the path always starts "at your feet."
     const screenPts = [{ x: w / 2, y: bottomY, halfWidth: bottomHalfW }, ...projected.map(screenPoint)];
-
-    const urgency = Math.min(Math.abs(projected[0].rel) / 70, 1);
-    const r = Math.round(60 + urgency * 190);
-    const g = Math.round(200 - urgency * 60);
-    const pathColor = `rgb(${r}, ${g}, 90)`;
+    const urgency = Math.min(Math.abs(projected[0]?.rel || 0) / 70, 1);
+    const pathColor = `rgb(${Math.round(60 + urgency * 190)}, ${Math.round(200 - urgency * 60)}, 90)`;
 
     ctx.save();
     ctx.beginPath();
-    const leftEdge = screenPts.map((p) => ({ x: p.x - p.halfWidth, y: p.y }));
-    const rightEdge = screenPts.map((p) => ({ x: p.x + p.halfWidth, y: p.y })).reverse();
-    this._tracePolylineSmooth(ctx, leftEdge, false);
-    this._tracePolylineSmooth(ctx, rightEdge, true);
+    _traceSmooth(ctx, screenPts.map((p) => ({ x: p.x - p.halfWidth, y: p.y })), false);
+    _traceSmooth(ctx, [...screenPts.map((p) => ({ x: p.x + p.halfWidth, y: p.y }))].reverse(), true);
     ctx.closePath();
-
     const grad = ctx.createLinearGradient(0, bottomY, 0, topY);
     grad.addColorStop(0, pathColor);
     grad.addColorStop(1, 'rgba(255,255,255,0.15)');
@@ -406,102 +729,43 @@ class ArOverlay {
     ctx.stroke();
     ctx.restore();
 
-    // Chevrons flowing along the path's centerline, each pointing along
-    // its local tangent so they visually "aim" around every curve, not
-    // just a single overall lean.
-    const centerPts = screenPts.map((p) => ({ x: p.x, y: p.y }));
-    const chevronCount = 4;
-    for (let i = 0; i < chevronCount; i++) {
-      const p = (i / chevronCount + this._flowPhase) % 1;
-      const pt = this._pointOnPolyline(centerPts, p);
-      const localWidth = bottomHalfW * (1 - p) + topHalfW * p;
-      this._drawChevron(pt.x, pt.y, pt.angle, localWidth * 0.9, pathColor);
+    const cPts = screenPts.map((p) => ({ x: p.x, y: p.y }));
+    for (let i = 0; i < 4; i++) {
+      const p = (i / 4 + this._flowPhase) % 1;
+      const pt = _pointOnPolyline(cPts, p);
+      const lw = bottomHalfW * (1 - p) + topHalfW * p;
+      _drawChevron(ctx, pt.x, pt.y, pt.angle, lw * 0.9, pathColor);
     }
-
-    const tip = this._pointOnPolyline(centerPts, 1);
-    this._drawChevron(tip.x, tip.y - 6, tip.angle, topHalfW * 2.2, pathColor, 1.4);
   }
 
-  /**
-   * Traces a smooth curve through a polyline's points using quadratic
-   * curves through consecutive midpoints — a standard, simple technique
-   * for a smooth line through arbitrary control points without needing a
-   * full spline implementation. `continuePath` appends to the current
-   * canvas path (via lineTo for the first point) instead of starting a
-   * new subpath, so a left edge and a reversed right edge can be traced
-   * back-to-back into one closed shape.
-   */
-  _tracePolylineSmooth(ctx, points, continuePath) {
-    if (points.length === 0) return;
-    if (continuePath) ctx.lineTo(points[0].x, points[0].y);
-    else ctx.moveTo(points[0].x, points[0].y);
-    if (points.length === 1) return;
-    if (points.length === 2) {
-      ctx.lineTo(points[1].x, points[1].y);
-      return;
-    }
-    for (let i = 1; i < points.length - 1; i++) {
-      const midX = (points[i].x + points[i + 1].x) / 2;
-      const midY = (points[i].y + points[i + 1].y) / 2;
-      ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
-    }
-    const last = points[points.length - 1];
-    ctx.lineTo(last.x, last.y);
-  }
-
-  /** Point + tangent angle at parameter p (0=first, 1=last) along a polyline, interpolating evenly by segment index. */
-  _pointOnPolyline(points, p) {
-    const n = points.length;
-    if (n === 1) return { x: points[0].x, y: points[0].y, angle: 0 };
-    const scaled = Math.max(0, Math.min(1, p)) * (n - 1);
-    const i0 = Math.min(Math.floor(scaled), n - 2);
-    const i1 = i0 + 1;
-    const localT = scaled - i0;
-    const x = points[i0].x + (points[i1].x - points[i0].x) * localT;
-    const y = points[i0].y + (points[i1].y - points[i0].y) * localT;
-    const dx = points[i1].x - points[i0].x;
-    const dy = points[i1].y - points[i0].y;
-    return { x, y, angle: Math.atan2(dx, -dy) };
-  }
-
-  _drawChevron(x, y, angle, width, color, scale = 1) {
+  _drawLabel(w, labelTop, label, dist) {
     const { ctx } = this;
-    const h = width * 0.55 * scale;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.moveTo(0, -h);
-    ctx.lineTo(width / 2, h * 0.5);
-    ctx.lineTo(width * 0.18, h * 0.5);
-    ctx.lineTo(0, -h * 0.15);
-    ctx.lineTo(-width * 0.18, h * 0.5);
-    ctx.lineTo(-width / 2, h * 0.5);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.9;
-    ctx.fill();
-    ctx.restore();
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(0, labelTop, w, 52);
+    ctx.fillStyle = '#fff';
+    ctx.font = '600 19px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    const distText = dist != null ? `  ${dist.toFixed(1)} m` : '';
+    ctx.fillText(`${label || ''}${distText}`, w / 2, labelTop + 33);
   }
 
   _drawTurnAround(rel, w, h, pathTop, bottomOffset) {
     const { ctx } = this;
-    const availHeight = Math.max(h - pathTop - bottomOffset, 160);
+    const availH = Math.max(h - pathTop - bottomOffset, 160);
     const cx = w / 2;
-    const cy = pathTop + availHeight * 0.35;
-    const size = Math.min(w, availHeight) * 0.16;
-    const side = rel > 0 ? 1 : -1; // which way to loop around
+    const cy = pathTop + availH * 0.35;
+    const size = Math.min(w, availH) * 0.16;
+    const side = rel > 0 ? 1 : -1;
 
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.strokeStyle = 'rgba(217,154,43,0.95)'; // caution amber
+    ctx.strokeStyle = 'rgba(217,154,43,0.95)';
     ctx.lineWidth = size * 0.28;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.arc(0, 0, size, Math.PI * 0.15 * side, Math.PI * 1.6 * side, side < 0);
     ctx.stroke();
 
-    // Arrowhead at the open end of the loop
     ctx.beginPath();
     const endAngle = Math.PI * 1.6 * side;
     const ex = Math.cos(endAngle) * size;
@@ -516,28 +780,86 @@ class ArOverlay {
     ctx.fill();
     ctx.restore();
   }
+}
 
-  _drawCompassFallbackNotice(w, y) {
-    const { ctx } = this;
-    ctx.save();
-    ctx.font = '600 13px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(217,154,43,0.9)'; // caution amber, matches turn-around color
-    ctx.fillText('No compass signal — showing straight-ahead', w / 2, y);
-    ctx.restore();
-  }
+// ------------------------------------------------------------------
+// Standalone geometry helpers (module-level, no class needed)
+// ------------------------------------------------------------------
 
-  _drawLabel(w, labelTop) {
-    const { ctx } = this;
-    const barY = labelTop;
-    ctx.fillStyle = 'rgba(0,0,0,0.65)';
-    ctx.fillRect(0, barY, w, 52);
-    ctx.fillStyle = '#fff';
-    ctx.font = '600 19px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    const distText = this.distanceRemaining !== null ? `${this.distanceRemaining.toFixed(1)} m` : '';
-    ctx.fillText(`${this.destinationLabel}  ${distText}`, w / 2, barY + 33);
+function _haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toR = (d) => (d * Math.PI) / 180;
+  const dLat = toR(lat2 - lat1);
+  const dLon = toR(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toR(lat1)) * Math.cos(toR(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function _initialBearing(lat1, lon1, lat2, lon2) {
+  const toR = (d) => (d * Math.PI) / 180;
+  const y = Math.sin(toR(lon2 - lon1)) * Math.cos(toR(lat2));
+  const x = Math.cos(toR(lat1)) * Math.sin(toR(lat2))
+    - Math.sin(toR(lat1)) * Math.cos(toR(lat2)) * Math.cos(toR(lon2 - lon1));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function _traceSmooth(ctx, points, continuePath) {
+  if (!points.length) return;
+  if (continuePath) ctx.lineTo(points[0].x, points[0].y);
+  else ctx.moveTo(points[0].x, points[0].y);
+  if (points.length < 2) return;
+  if (points.length === 2) { ctx.lineTo(points[1].x, points[1].y); return; }
+  for (let i = 1; i < points.length - 1; i++) {
+    const mx = (points[i].x + points[i + 1].x) / 2;
+    const my = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
   }
+  ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+}
+
+function _pointOnPolyline(points, p) {
+  const n = points.length;
+  if (n === 1) return { x: points[0].x, y: points[0].y, angle: 0 };
+  const s = Math.max(0, Math.min(1, p)) * (n - 1);
+  const i0 = Math.min(Math.floor(s), n - 2);
+  const i1 = i0 + 1;
+  const t  = s - i0;
+  return {
+    x: points[i0].x + (points[i1].x - points[i0].x) * t,
+    y: points[i0].y + (points[i1].y - points[i0].y) * t,
+    angle: Math.atan2(points[i1].x - points[i0].x, -(points[i1].y - points[i0].y)),
+  };
+}
+
+function _drawChevron(ctx, x, y, angle, width, color, scale = 1) {
+  const h = width * 0.55 * scale;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(0, -h);
+  ctx.lineTo(width / 2, h * 0.5);
+  ctx.lineTo(width * 0.18, h * 0.5);
+  ctx.lineTo(0, -h * 0.15);
+  ctx.lineTo(-width * 0.18, h * 0.5);
+  ctx.lineTo(-width / 2, h * 0.5);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.9;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function _roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
 }
 
 window.ArOverlay = ArOverlay;

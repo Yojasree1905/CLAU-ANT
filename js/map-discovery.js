@@ -1,0 +1,291 @@
+/**
+ * map-discovery.js
+ * -----------------------------------------------------------------------
+ * Discovers real buildings, amenities, and landmarks near the user using
+ * the Overpass API (OpenStreetMap's free query interface — no key, no
+ * billing). Falls back to Nominatim geocoding for anything not found in
+ * the local area query.
+ *
+ * This replaces the hand-authored node graphs (sjt-7th-floor.js, etc.)
+ * for destination discovery. The actual ROUTE between two points still
+ * comes from route-provider.js; this module only answers "what is at
+ * coordinates X,Y?" and "what coordinates does 'the library' map to?"
+ *
+ * Results are cached in localStorage (24h TTL) so a campus walk doesn't
+ * fire a new network request every time the user speaks a destination.
+ * -----------------------------------------------------------------------
+ */
+
+const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
+const CACHE_KEY = 'navassist_map_discovery_cache';
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Overpass tags we care about for campus navigation
+const OVERPASS_FILTERS = [
+  '["amenity"]',
+  '["building"]',
+  '["shop"]',
+  '["barrier"="gate"]',
+  '["highway"="bus_stop"]',
+  '["leisure"]',
+  '["tourism"]',
+  '["office"]',
+];
+
+class MapDiscovery {
+  constructor() {
+    this._cache = null; // {fetchedAt, lat, lon, radius, results:[]}
+    this._loadCache();
+  }
+
+  // -------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------
+
+  /**
+   * Returns POI results near (lat, lon) within radiusM meters.
+   * Uses cache if the last fetch was close enough and fresh enough.
+   * Each result: { id, name, lat, lon, type, tags }
+   */
+  async searchNearby(lat, lon, radiusM = 800) {
+    if (this._isCacheValid(lat, lon, radiusM)) {
+      return this._cache.results;
+    }
+
+    const results = await this._fetchOverpass(lat, lon, radiusM);
+    this._cache = {
+      fetchedAt: Date.now(),
+      lat, lon, radius: radiusM,
+      results,
+    };
+    this._saveCache();
+    return results;
+  }
+
+  /**
+   * Resolves a free-text voice query (e.g. "library", "main gate",
+   * "canteen") to { name, lat, lon } using:
+   *   1. Fuzzy-match against cached Overpass results (fast, offline-ish)
+   *   2. Nominatim geocoding as fallback (network required)
+   * Returns null if nothing is found.
+   */
+  async resolveQuery(query, lat, lon) {
+    // Try local POI search first (no extra network call if cached)
+    try {
+      const nearby = await this.searchNearby(lat, lon, 1000);
+      const match = this._fuzzyMatch(query, nearby);
+      if (match) return { name: match.name, lat: match.lat, lon: match.lon };
+    } catch (_) {
+      // Overpass failed or timed out — fall through to Nominatim
+    }
+
+    // Nominatim fallback: biased toward the area around the user
+    return this._nominatimSearch(query, lat, lon);
+  }
+
+  /**
+   * Returns a list of POIs sorted by relevance to the query string,
+   * for populating the destination list in the sidebar.
+   */
+  async getDestinationList(lat, lon) {
+    try {
+      const results = await this.searchNearby(lat, lon, 800);
+      // Filter to things with real names and return them sorted
+      return results
+        .filter((r) => r.name && r.name.trim().length > 2)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Overpass API
+  // -------------------------------------------------------------------
+
+  async _fetchOverpass(lat, lon, radiusM) {
+    // Build bounding box: lat/lon ± rough degree equivalent of radiusM
+    const degOffset = radiusM / 111000;
+    const south = lat - degOffset;
+    const north = lat + degOffset;
+    const west = lon - degOffset;
+    const east = lon + degOffset;
+    const bbox = `${south},${west},${north},${east}`;
+
+    const filterLines = OVERPASS_FILTERS.flatMap((f) => [
+      `  node${f}(${bbox});`,
+      `  way${f}(${bbox});`,
+    ]).join('\n');
+
+    const query = `[out:json][timeout:12];\n(\n${filterLines}\n);\nout center tags;`;
+
+    const res = await fetch(OVERPASS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `data=${encodeURIComponent(query)}`,
+    });
+
+    if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+    const data = await res.json();
+
+    const results = [];
+    for (const el of data.elements || []) {
+      const name = el.tags?.name || el.tags?.['alt_name'] || el.tags?.['old_name'];
+      if (!name) continue; // skip unnamed features
+
+      // Ways have a center object; nodes have lat/lon directly
+      const elLat = el.type === 'way' ? el.center?.lat : el.lat;
+      const elLon = el.type === 'way' ? el.center?.lon : el.lon;
+      if (!elLat || !elLon) continue;
+
+      results.push({
+        id: `${el.type}/${el.id}`,
+        name,
+        lat: elLat,
+        lon: elLon,
+        type: el.tags?.amenity || el.tags?.building || el.tags?.shop
+              || el.tags?.barrier || el.tags?.highway || el.tags?.leisure
+              || el.tags?.tourism || el.tags?.office || 'place',
+        tags: el.tags || {},
+      });
+    }
+
+    // Deduplicate by name (ways and their entrance nodes often both appear)
+    const seen = new Set();
+    return results.filter((r) => {
+      const key = r.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  // -------------------------------------------------------------------
+  // Nominatim geocoding fallback
+  // -------------------------------------------------------------------
+
+  async _nominatimSearch(query, lat, lon) {
+    try {
+      const degOffset = 0.02; // ~2km viewbox bias toward user's area
+      const viewbox = [
+        lon - degOffset,
+        lat + degOffset,
+        lon + degOffset,
+        lat - degOffset,
+      ].join(',');
+
+      const params = new URLSearchParams({
+        q: query,
+        format: 'json',
+        limit: '5',
+        viewbox,
+        bounded: '0',
+      });
+
+      const res = await fetch(`${NOMINATIM_URL}?${params}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data.length) return null;
+
+      const best = data[0];
+      return {
+        name: best.display_name.split(',')[0].trim(),
+        lat: parseFloat(best.lat),
+        lon: parseFloat(best.lon),
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Fuzzy matching — same word-overlap approach as the old venue-graph
+  // -------------------------------------------------------------------
+
+  _fuzzyMatch(query, pois) {
+    const q = query.toLowerCase().trim();
+    let best = null;
+    let bestScore = 0;
+
+    for (const poi of pois) {
+      const nameFields = [
+        poi.name,
+        poi.tags?.['alt_name'],
+        poi.tags?.['old_name'],
+        poi.tags?.description,
+        poi.type,
+      ].filter(Boolean);
+
+      for (const field of nameFields) {
+        const score = this._matchScore(q, field.toLowerCase());
+        if (score > bestScore) {
+          bestScore = score;
+          best = poi;
+        }
+      }
+    }
+
+    // Require at least a decent partial match (0.4) to avoid returning
+    // a totally unrelated place just because it's the closest string
+    return bestScore >= 0.4 ? best : null;
+  }
+
+  _matchScore(text, candidate) {
+    if (text === candidate) return 2;
+    if (candidate.includes(text)) return 1.5;
+    if (text.includes(candidate)) return 1 + candidate.length / 100;
+
+    // Word-overlap fallback
+    const tWords = new Set(text.split(/\s+/).filter((w) => w.length > 2));
+    const cWords = candidate.split(/\s+/).filter((w) => w.length > 2);
+    if (!cWords.length) return 0;
+    const hits = cWords.filter((w) => tWords.has(w)).length;
+    return hits / cWords.length;
+  }
+
+  // -------------------------------------------------------------------
+  // Cache helpers
+  // -------------------------------------------------------------------
+
+  _isCacheValid(lat, lon, radiusM) {
+    if (!this._cache) return false;
+    if (Date.now() - this._cache.fetchedAt > CACHE_TTL_MS) return false;
+    // Reuse if query is within the previously-fetched area
+    const dist = _haversineMeters(lat, lon, this._cache.lat, this._cache.lon);
+    return dist + radiusM <= this._cache.radius * 1.5;
+  }
+
+  _loadCache() {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (raw) this._cache = JSON.parse(raw);
+    } catch (_) { this._cache = null; }
+  }
+
+  _saveCache() {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(this._cache));
+    } catch (_) {}
+  }
+
+  /** Invalidate cache (call when the user moves far from their last known area) */
+  clearCache() {
+    this._cache = null;
+    try { localStorage.removeItem(CACHE_KEY); } catch (_) {}
+  }
+}
+
+/** Haversine distance in meters between two lat/lon points — local copy
+ *  so this module doesn't depend on venue-graph.js being loaded first. */
+function _haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+window.MapDiscovery = MapDiscovery;
