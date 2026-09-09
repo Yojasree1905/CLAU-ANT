@@ -135,6 +135,9 @@ class ArOverlay {
     if (typeof e.webkitCompassHeading === 'number') {
       this.heading = e.webkitCompassHeading;
       this.hasLiveHeading = true;
+    } else if (e.absolute && e.alpha !== null) {
+      this.heading = (360 - e.alpha) % 360;
+      this.hasLiveHeading = true;
     } else if (e.alpha !== null) {
       this.heading = (360 - e.alpha) % 360;
       this.hasLiveHeading = true;
@@ -189,24 +192,36 @@ class ArOverlay {
   // ------------------------------------------------------------------
   _drawBuildingOverlays(w, h, topOffset, botOffset) {
     if (this.currentLat === null || this.currentLon === null) return;
-    const heading = this.heading ?? 0;
+
+    // Resolve heading: if live compass isn't reporting, align with active destination
+    let heading = this.heading;
+    if (heading === null) {
+      if (this.activeDestination && this.activeDestination.lat != null) {
+        heading = _initialBearing(this.currentLat, this.currentLon, this.activeDestination.lat, this.activeDestination.lon);
+      } else {
+        heading = 0;
+      }
+    }
     const halfFov = this.fovH / 2;
 
-    // Collect all candidates (nearby buildings + active destination)
-    const candidates = [...this.nearbyBuildings];
-
-    // Ensure active destination is in the list
+    // RULE 1: If navigating to a destination, FOCUS ONLY ON THE DESTINATION!
+    // Never clutter the view with 10 other buildings when the user has an active route.
+    let candidates = [];
     if (this.activeDestination && this.activeDestination.lat != null) {
-      const exists = candidates.some(b => b.name === this.activeDestination.name);
-      if (!exists) {
-        candidates.push({
-          name: this.activeDestination.name,
-          lat: this.activeDestination.lat,
-          lon: this.activeDestination.lon,
-          purpose: 'Active Navigation Destination',
-          isDestination: true,
-        });
-      }
+      candidates = [{
+        name: this.activeDestination.name,
+        lat: this.activeDestination.lat,
+        lon: this.activeDestination.lon,
+        purpose: 'Target Destination',
+        isDestination: true,
+      }];
+    } else {
+      // Free exploration mode: only consider buildings within 75 meters!
+      candidates = this.nearbyBuildings.filter(b => {
+        if (!b.lat || !b.lon) return false;
+        const d = _haversine(this.currentLat, this.currentLon, b.lat, b.lon);
+        return d <= 75; // strict distance filter
+      });
     }
 
     // Calculate screen projection for each candidate
@@ -217,7 +232,6 @@ class ArOverlay {
     for (const b of candidates) {
       if (!b.lat || !b.lon) continue;
       const dist = _haversine(this.currentLat, this.currentLon, b.lat, b.lon);
-      if (dist > MAX_BUILDING_REVEAL_DIST) continue;
 
       const bearing = _initialBearing(this.currentLat, this.currentLon, b.lat, b.lon);
       let rel = bearing - heading;
@@ -228,13 +242,12 @@ class ArOverlay {
       );
 
       // Check if inside camera horizontal FOV
-      if (Math.abs(rel) <= halfFov * 1.1) {
+      if (Math.abs(rel) <= halfFov * 1.05) {
         const screenX = w / 2 + (rel / halfFov) * (w / 2);
 
-        // Perspective ground altitude: closer buildings are lower, farther are higher
-        const tDist = Math.min(1, Math.max(0, (dist - 10) / 250));
+        // Position comfortably in mid-viewport, away from top-bar and mini-map
         const usableH = h - topOffset - botOffset;
-        const screenY = topOffset + usableH * (0.38 - tDist * 0.18) + Math.sin(this._bobPhase) * 4;
+        const screenY = topOffset + usableH * 0.46 + Math.sin(this._bobPhase) * 3;
 
         visibleCards.push({
           building: b,
@@ -250,11 +263,22 @@ class ArOverlay {
       }
     }
 
-    // Sort visible cards so closer buildings render in front
-    visibleCards.sort((a, b) => b.dist - a.dist);
+    // Sort by distance (closest first)
+    visibleCards.sort((a, b) => a.dist - b.dist);
+
+    // RULE 2: Declutter & prevent stacking.
+    // If two cards are horizontally close (within 150px), keep ONLY the closer one!
+    const filteredCards = [];
+    for (const card of visibleCards) {
+      if (filteredCards.length >= 2) break; // at most 2 cards on screen at any time!
+      const overlaps = filteredCards.some(existing => Math.abs(existing.x - card.x) < 160);
+      if (!overlaps) {
+        filteredCards.push(card);
+      }
+    }
 
     // Render each building card and arrow
-    for (const item of visibleCards) {
+    for (const item of filteredCards) {
       this._drawSingleBuildingCard(item, w, h);
     }
 
