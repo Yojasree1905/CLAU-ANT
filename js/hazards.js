@@ -101,8 +101,14 @@ class HazardDetector {
   }
 
   async load() {
-    // Loaded from CDN in index.html: window.cocoSsd
-    this.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    if (typeof cocoSsd === 'undefined') {
+      throw new Error('cocoSsd library not loaded');
+    }
+    try {
+      this.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    } catch (_) {
+      this.model = await cocoSsd.load();
+    }
   }
 
   start(fps = 4) {

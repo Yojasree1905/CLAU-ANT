@@ -124,7 +124,8 @@ function init() {
   }
 
   _syncSettingsUI();
-  _renderDestinationList([]);
+  _renderDestinationList(_getKnownCampusPlaces());
+  _refreshNearbyPois(); // background fetch Overpass POIs around VIT Vellore
 
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
@@ -187,6 +188,19 @@ function init() {
 
   if (els.destFilter) {
     els.destFilter.addEventListener('input', (e) => filterDestList(e.target.value));
+    els.destFilter.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const val = e.target.value.trim();
+        if (val) {
+          toggleSidebar(false);
+          if (!state.isAssistantRunning) {
+            startAssistant().then(() => handleDestinationRequest(val));
+          } else {
+            handleDestinationRequest(val);
+          }
+        }
+      }
+    });
   }
 
   window.addEventListener('keydown', (e) => {
@@ -282,46 +296,123 @@ function toggleSidebar(open) {
   if (shouldOpen && els.destFilter) els.destFilter.focus();
 }
 
+let _allDestinations = [];
+
+function _getKnownCampusPlaces() {
+  const list = [];
+  const outdoorVenue = window.VENUES?.['outdoor_hostels'];
+  if (outdoorVenue && outdoorVenue.nodes) {
+    for (const node of outdoorVenue.nodes) {
+      list.push({
+        name: node.label,
+        aliases: node.aliases || [],
+        lat: node.lat,
+        lon: node.lon,
+        isAnchor: true,
+      });
+    }
+  }
+  return list;
+}
+
 function _renderDestinationList(pois) {
   if (!els.destList) return;
+  _allDestinations = (pois && pois.length) ? pois : _getKnownCampusPlaces();
   els.destList.innerHTML = '';
-  if (!pois.length) {
-    if (els.destCountBadge) els.destCountBadge.textContent = 'Say a destination';
+
+  if (!_allDestinations.length) {
+    if (els.destCountBadge) els.destCountBadge.textContent = '0 places';
     const li = document.createElement('li');
-    li.style.cssText = 'opacity:0.5; pointer-events:none; padding:10px 0;';
-    li.textContent = 'Start the assistant, then say or type a destination. Nearby buildings will appear here.';
+    li.style.cssText = 'opacity:0.6; pointer-events:none; padding:12px 0;';
+    li.textContent = 'Say or type any destination (e.g. "Library", "J Block", "Main Gate")';
     els.destList.appendChild(li);
     return;
   }
-  if (els.destCountBadge) els.destCountBadge.textContent = `${pois.length} nearby`;
-  for (const poi of pois) {
+
+  if (els.destCountBadge) els.destCountBadge.textContent = `${_allDestinations.length} places`;
+
+  for (const poi of _allDestinations) {
     const li = document.createElement('li');
     li.tabIndex = 0;
     li.setAttribute('role', 'option');
-    li.innerHTML = `<span>${poi.name}</span><span class="item-arrow">→</span>`;
-    li.addEventListener('click', () => {
+    li.dataset.name = poi.name;
+    li.dataset.aliases = (poi.aliases || []).join('|');
+
+    const badge = poi.isAnchor
+      ? '<span style="font-size:0.7rem; background:rgba(0,200,180,0.2); color:#00e5cc; padding:2px 6px; border-radius:4px; margin-left:6px; font-weight:normal;">Campus</span>'
+      : '';
+    const sub = (poi.aliases && poi.aliases.length)
+      ? `<div style="font-size:0.75rem; opacity:0.6; margin-top:2px;">${poi.aliases.slice(0, 3).join(', ')}</div>`
+      : '';
+
+    li.innerHTML = `
+      <div style="display:flex; flex-direction:column; justify-content:center; text-align:left;">
+        <div><strong>${poi.name}</strong>${badge}</div>
+        ${sub}
+      </div>
+      <span class="item-arrow">→</span>
+    `;
+
+    const trigger = () => {
       toggleSidebar(false);
       if (!state.isAssistantRunning) {
         startAssistant().then(() => handleDestinationRequest(poi.name));
       } else {
         handleDestinationRequest(poi.name);
       }
-    });
-    li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') li.click(); });
+    };
+    li.addEventListener('click', trigger);
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') trigger(); });
     els.destList.appendChild(li);
   }
 }
 
 function filterDestList(query) {
   const q = query.toLowerCase().trim();
-  const items = els.destList?.querySelectorAll('li') || [];
-  let count = 0;
+  const items = els.destList?.querySelectorAll('li[data-name]') || [];
+  let visibleCount = 0;
+
+  // Remove existing fallback search item if any
+  const existingSearchFallback = els.destList?.querySelector('.search-fallback-item');
+  if (existingSearchFallback) existingSearchFallback.remove();
+
   items.forEach((item) => {
-    const match = !q || item.textContent.toLowerCase().includes(q);
+    const name = (item.dataset.name || '').toLowerCase();
+    const aliases = (item.dataset.aliases || '').toLowerCase();
+    const match = !q || name.includes(q) || aliases.includes(q);
     item.style.display = match ? 'flex' : 'none';
-    if (match) count++;
+    if (match) visibleCount++;
   });
-  if (els.destCountBadge) els.destCountBadge.textContent = `${count} places`;
+
+  if (els.destCountBadge) {
+    els.destCountBadge.textContent = q ? `${visibleCount} found` : `${_allDestinations.length} places`;
+  }
+
+  // If query is typed, offer a prominent direct "Search map & route" action button
+  if (q && els.destList) {
+    const searchLi = document.createElement('li');
+    searchLi.className = 'search-fallback-item';
+    searchLi.tabIndex = 0;
+    searchLi.style.cssText = 'background:rgba(59,130,246,0.18); border:1px solid rgba(59,130,246,0.4); border-radius:8px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;';
+    searchLi.innerHTML = `
+      <div style="text-align:left;">
+        <strong style="color:#60a5fa;">🔍 Route to "${query}"</strong>
+        <div style="font-size:0.75rem; opacity:0.8;">Search map & start walking route</div>
+      </div>
+      <span class="item-arrow" style="color:#60a5fa;">→</span>
+    `;
+    const triggerSearch = () => {
+      toggleSidebar(false);
+      if (!state.isAssistantRunning) {
+        startAssistant().then(() => handleDestinationRequest(query));
+      } else {
+        handleDestinationRequest(query);
+      }
+    };
+    searchLi.addEventListener('click', triggerSearch);
+    searchLi.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') triggerSearch(); });
+    els.destList.insertBefore(searchLi, els.destList.firstChild);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -417,11 +508,31 @@ async function startAssistant() {
 
 async function _refreshNearbyPois() {
   try {
+    const campusPlaces = _getKnownCampusPlaces();
+    // Default reference is calibrated campus location (VIT Vellore)
+    let lat = 12.9682, lon = 79.1594;
     const fix = await getFreshGpsFix();
-    if (!fix || !mapDiscovery) return;
-    const pois = await mapDiscovery.getDestinationList(fix.lat, fix.lon);
-    _renderDestinationList(pois);
-  } catch (_) {}
+    if (fix && fix.lat && fix.lon) {
+      lat = fix.lat;
+      lon = fix.lon;
+    }
+    if (!mapDiscovery) mapDiscovery = new MapDiscovery();
+    const mapPois = await mapDiscovery.getDestinationList(lat, lon);
+
+    // Merge: campus anchors first, then external places
+    const merged = [...campusPlaces];
+    const seen = new Set(campusPlaces.map((p) => p.name.toLowerCase()));
+    for (const p of mapPois) {
+      const key = p.name.toLowerCase();
+      if (!seen.has(key)) {
+        merged.push(p);
+        seen.add(key);
+      }
+    }
+    _renderDestinationList(merged);
+  } catch (err) {
+    console.warn('Refresh POIs error:', err);
+  }
 }
 
 // ------------------------------------------------------------------

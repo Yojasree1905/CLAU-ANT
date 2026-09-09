@@ -47,28 +47,45 @@ function gpsEdge(a, b) {
   return { a, b, distance_m: null };
 }
 
-// Fuzzy-match a spoken phrase against a list of GPS nodes' aliases.
-// Used by the outdoor venue to resolve "hostel g" → a calibrated GPS anchor
-// before falling back to Overpass / Nominatim.
+// Fuzzy-match a spoken phrase against a list of GPS nodes' aliases & labels.
+// Used by the outdoor venue to resolve "hostel j", "j block", "main gate", etc.
 function resolveGpsNode(nodes, phrase) {
+  if (!nodes || !phrase) return null;
   const text = phrase.toLowerCase().trim();
   let best = null;
   let bestScore = 0;
+
   for (const node of nodes) {
-    for (const alias of (node.aliases || [])) {
-      const score = _matchScore(text, alias.toLowerCase());
-      if (score > bestScore) { bestScore = score; best = node; }
+    const candidates = [
+      node.label,
+      node.id,
+      node.id.replace(/_/g, ' '),
+      ...(node.aliases || [])
+    ];
+    for (const cand of candidates) {
+      if (!cand) continue;
+      const c = cand.toLowerCase().trim();
+      const score = _matchScore(text, c);
+      if (score > bestScore) {
+        bestScore = score;
+        best = node;
+      }
     }
   }
-  return bestScore >= 0.5 ? best : null;
+  return bestScore >= 0.35 ? best : null;
 }
 
-function _matchScore(text, alias) {
-  if (text.includes(alias)) return 1 + alias.length / 100;
-  const tset = new Set(text.split(/\s+/));
-  const aset = alias.split(/\s+/);
-  const hits = aset.filter((tok) => tset.has(tok)).length;
-  return hits / aset.length;
+function _matchScore(text, candidate) {
+  if (text === candidate) return 2.0;
+  if (text.includes(candidate)) return 1.5 + candidate.length / 100;
+  if (candidate.includes(text)) return 1.2 + text.length / 100;
+
+  const tset = new Set(text.split(/\s+/).filter(w => w.length > 1));
+  const cset = candidate.split(/\s+/).filter(w => w.length > 1);
+  if (!cset.length || !tset.size) return 0;
+
+  const hits = cset.filter((tok) => tset.has(tok)).length;
+  return hits / cset.length;
 }
 
 // ---------------------------------------------------------------------

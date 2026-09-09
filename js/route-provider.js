@@ -28,7 +28,7 @@
  * -----------------------------------------------------------------------
  */
 
-const DEFAULT_PROVIDER = 'osrm';
+const DEFAULT_PROVIDER = 'ors';
 
 class RouteProvider {
   constructor({ provider = DEFAULT_PROVIDER, orsApiKey = null, gmapsApiKey = null } = {}) {
@@ -90,7 +90,8 @@ class RouteProvider {
   // OpenRouteService
   // ------------------------------------------------------------------
   async _getRouteOrs(from, to) {
-    const url = 'https://api.openrouteservice.org/v2/directions/foot-walking/geojson';
+    // ORS migrated from api.openrouteservice.org → api.heigit.org (Directions V2)
+    const url = 'https://api.heigit.org/ors/v2/directions/foot-walking/geojson';
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: this.orsApiKey },
