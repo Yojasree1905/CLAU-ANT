@@ -18,11 +18,20 @@
   <canvas id="ar-canvas"></canvas>
 
   <!-- Top-Right 3x3 Mini-Map Widget (Expandable on tap to 6x6 modal) -->
-  <div id="mini-map-card" title="Tap to expand map" role="region" aria-label="Route mini-map">
+  <div id="mini-map-card" title="Tap to expand map, drag to move" role="region" aria-label="Route mini-map">
     <div id="mini-map"></div>
     <button id="mini-map-expand-btn" class="mini-map-btn" aria-label="Expand map" title="Expand map">⤢</button>
     <button id="mini-map-close-btn" class="mini-map-btn" style="display:none;" aria-label="Collapse map" title="Collapse map">✕</button>
     <span id="mini-map-dist-badge" style="display:none;">0m</span>
+  </div>
+
+  <!-- Mini Compass next to map -->
+  <div id="mini-compass-card" title="Compass heading">
+    <div id="mini-compass-dial">
+      <span class="compass-n">N</span>
+      <div class="compass-needle-n"></div>
+      <div class="compass-needle-s"></div>
+    </div>
   </div>
 
   <!-- Sleek Frosted Top Bar -->

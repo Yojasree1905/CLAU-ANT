@@ -1,16 +1,13 @@
 /**
  * mini-map.js
  * -----------------------------------------------------------------------
- * Interactive top-right Mini-Map widget for NAV-AR.
- *
- * Behavior:
- *   - Compact 3x3 square widget in top-right viewport corner.
- *   - Shows user's live GPS position with blue pulsing beacon.
- *   - When navigating to a destination, draws the walking route polyline
- *     and destination flag marker.
- *   - Tap on the 3x3 widget -> expands smoothly to a large 6x6 modal map view
- *     with zoom controls and route preview.
- *   - Tap collapse button (or tap outside) -> shrinks back to 3x3 widget.
+ * Interactive Mini-Map widget for NAV-AR:
+ *   - Freely draggable across the screen via touch/mouse drag.
+ *   - OpenStreetMap tiles (100% free, no API key, no watermark).
+ *   - Live user GPS tracking with pulsing blue beacon.
+ *   - Route polyline & destination flag.
+ *   - Smooth tap-to-expand (6x6) and collapse (3x3).
+ *   - Live compass integration.
  * -----------------------------------------------------------------------
  */
 
@@ -21,6 +18,7 @@ class MiniMapController {
     this.expandBtn = document.getElementById('mini-map-expand-btn');
     this.closeBtn = document.getElementById('mini-map-close-btn');
     this.distBadge = document.getElementById('mini-map-dist-badge');
+    this.compassEl = document.getElementById('mini-compass-dial');
     this.isExpanded = false;
 
     this.map = null;
@@ -33,6 +31,7 @@ class MiniMapController {
 
     this._initMap();
     this._wireEvents();
+    this._makeDraggable();
   }
 
   _initMap() {
@@ -49,10 +48,10 @@ class MiniMapController {
       maxZoom: 19,
     });
 
-    // Dark-mode friendly OpenStreetMap Carto tiles
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // 100% Free Public OpenStreetMap tiles (NO API key, NO watermark)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      subdomains: 'abcd',
+      subdomains: ['a', 'b', 'c'],
     }).addTo(this.map);
 
     // Custom user location beacon icon
@@ -68,8 +67,8 @@ class MiniMapController {
     // Accuracy circle
     this.userCircle = L.circle(defaultCenter, {
       radius: 12,
-      color: '#3b82f6',
-      fillColor: '#3b82f6',
+      color: '#00e5cc',
+      fillColor: '#00e5cc',
       fillOpacity: 0.15,
       weight: 1.5,
     }).addTo(this.map);
@@ -79,7 +78,11 @@ class MiniMapController {
     if (!this.container) return;
 
     this.container.addEventListener('click', (e) => {
-      // Don't toggle if clicking close button specifically
+      // Don't expand if dragging just occurred or clicking close button
+      if (this._didDrag) {
+        this._didDrag = false;
+        return;
+      }
       if (e.target.closest('#mini-map-close-btn')) return;
       if (!this.isExpanded) {
         this.expand();
@@ -91,6 +94,92 @@ class MiniMapController {
         e.stopPropagation();
         this.collapse();
       });
+    }
+  }
+
+  _makeDraggable() {
+    const el = this.container;
+    if (!el) return;
+
+    let isDragging = false;
+    let startX, startY;
+    let origLeft, origTop;
+    this._didDrag = false;
+
+    const onPointerDown = (clientX, clientY, target) => {
+      if (this.isExpanded) return; // don't drag when expanded full modal
+      if (target.closest('.mini-map-btn')) return;
+
+      isDragging = true;
+      this._didDrag = false;
+      startX = clientX;
+      startY = clientY;
+
+      const rect = el.getBoundingClientRect();
+      origLeft = rect.left;
+      origTop = rect.top;
+
+      // Switch to left/top positioning from right/top
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
+      el.style.left = `${origLeft}px`;
+      el.style.top = `${origTop}px`;
+      el.style.transition = 'none';
+    };
+
+    const onPointerMove = (clientX, clientY) => {
+      if (!isDragging) return;
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        this._didDrag = true;
+      }
+
+      const maxW = window.innerWidth - el.offsetWidth - 8;
+      const maxH = window.innerHeight - el.offsetHeight - 8;
+      const newLeft = Math.max(8, Math.min(maxW, origLeft + dx));
+      const newTop = Math.max(50, Math.min(maxH, origTop + dy));
+
+      el.style.left = `${newLeft}px`;
+      el.style.top = `${newTop}px`;
+    };
+
+    const onPointerUp = () => {
+      if (!isDragging) return;
+      isDragging = false;
+      el.style.transition = '';
+    };
+
+    // Touch events for mobile
+    el.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      onPointerDown(touch.clientX, touch.clientY, e.target);
+    }, { passive: true });
+
+    window.addEventListener('touchmove', (e) => {
+      if (!isDragging) return;
+      const touch = e.touches[0];
+      onPointerMove(touch.clientX, touch.clientY);
+    }, { passive: true });
+
+    window.addEventListener('touchend', onPointerUp);
+
+    // Mouse events for desktop testing
+    el.addEventListener('mousedown', (e) => {
+      onPointerDown(e.clientX, e.clientY, e.target);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      onPointerMove(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mouseup', onPointerUp);
+  }
+
+  updateCompass(headingDeg) {
+    if (this.compassEl && typeof headingDeg === 'number') {
+      this.compassEl.style.transform = `rotate(${-headingDeg}deg)`;
     }
   }
 
@@ -138,10 +227,8 @@ class MiniMapController {
     if (!this.map) return;
     this.activeRoute = { polyline, destName };
 
-    // Show widget container if hidden
     this.container.style.display = 'block';
 
-    // Remove old route layer
     if (this.routePolyline) {
       this.map.removeLayer(this.routePolyline);
       this.routePolyline = null;
@@ -153,16 +240,14 @@ class MiniMapController {
 
     if (!polyline || polyline.length < 2) return;
 
-    // Draw glowing route line
     this.routePolyline = L.polyline(polyline, {
       color: '#00e5cc',
       weight: 5,
-      opacity: 0.9,
+      opacity: 0.95,
       lineCap: 'round',
       lineJoin: 'round',
     }).addTo(this.map);
 
-    // Destination pin
     const lastPoint = polyline[polyline.length - 1];
     const destIcon = L.divIcon({
       className: 'dest-flag-pin',
@@ -173,7 +258,6 @@ class MiniMapController {
 
     this.destMarker = L.marker(lastPoint, { icon: destIcon }).addTo(this.map);
 
-    // Update distance badge
     if (this.distBadge) {
       this.distBadge.textContent = distanceMeters < 1000
         ? `${Math.round(distanceMeters)}m`
@@ -214,7 +298,7 @@ class MiniMapController {
     if (!this.map) return;
     if (this.routePolyline) {
       this.map.fitBounds(this.routePolyline.getBounds(), {
-        padding: this.isExpanded ? [30, 30] : [12, 12],
+        padding: this.isExpanded ? [30, 30] : [10, 10],
         maxZoom: 18,
       });
     } else if (this.currentPosition) {
