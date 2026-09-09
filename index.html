@@ -9,12 +9,21 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <meta name="theme-color" content="#121316" />
 <link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 </head>
 <body>
 <div id="app">
   <!-- AR Viewport -->
   <video id="camera" playsinline muted></video>
   <canvas id="ar-canvas"></canvas>
+
+  <!-- Top-Right 3x3 Mini-Map Widget (Expandable on tap to 6x6 modal) -->
+  <div id="mini-map-card" title="Tap to expand map" role="region" aria-label="Route mini-map">
+    <div id="mini-map"></div>
+    <button id="mini-map-expand-btn" class="mini-map-btn" aria-label="Expand map" title="Expand map">⤢</button>
+    <button id="mini-map-close-btn" class="mini-map-btn" style="display:none;" aria-label="Collapse map" title="Collapse map">✕</button>
+    <span id="mini-map-dist-badge" style="display:none;">0m</span>
+  </div>
 
   <!-- Sleek Frosted Top Bar -->
   <header id="top-bar">
@@ -283,6 +292,9 @@
 <script src="js/hazards.js"></script>
 <!-- OpenAI AI assistant layer -->
 <script src="js/ai-assistant.js"></script>
+<!-- Leaflet Map library and Mini-Map Controller -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="js/mini-map.js"></script>
 <!-- App controller -->
 <script src="js/app.js"></script>
 

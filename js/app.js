@@ -43,6 +43,7 @@ let routeProvider = null;
 let mapDiscovery = null;
 let aiAssistant = null;
 let localizer = null;
+let miniMap = null;
 
 window.addEventListener('DOMContentLoaded', init);
 
@@ -126,6 +127,11 @@ function init() {
   _syncSettingsUI();
   _renderDestinationList(_getKnownCampusPlaces());
   _refreshNearbyPois(); // background fetch Overpass POIs around VIT Vellore
+
+  // Mini-Map Widget
+  if (typeof MiniMapController !== 'undefined') {
+    miniMap = new MiniMapController();
+  }
 
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
@@ -451,8 +457,9 @@ async function startAssistant() {
   ar.setFov(settings.cameraFovH);
   ar.start();
 
-  // GPS tracker
+  // GPS tracker - live tracking for AR building detection & mini-map
   gpsTracker = new GpsTracker();
+  gpsTracker.start({ onUpdate: _handleGpsUpdate, onError: _handleGpsError });
 
   // Routing
   routeProvider = new RouteProvider({
@@ -530,6 +537,7 @@ async function _refreshNearbyPois() {
       }
     }
     _renderDestinationList(merged);
+    ar && ar.setNearbyBuildings(merged, lat, lon);
   } catch (err) {
     console.warn('Refresh POIs error:', err);
   }
@@ -622,6 +630,10 @@ async function _routeTo(dest) {
   voice.speak(msg, { key: 'route-start', interrupt: true });
   setStatus(`Route: ${dest.name}`);
 
+  // Display walking route on 3x3 Mini-Map and highlight in AR
+  miniMap && miniMap.setRoute(route.points, dest.name, route.distanceMeters);
+  ar && ar.setActiveDestination(dest.name, dest.lat, dest.lon, route.distanceMeters);
+
   // Start GPS tracking along the route
   _startGpsNav();
   _announceRouteProgress();
@@ -655,7 +667,13 @@ function _stopGpsNav() {
 }
 
 function _handleGpsUpdate(fix) {
+  if (!fix) return;
   state.outdoorPosition = fix;
+
+  // Always update mini-map position and AR nearby buildings in view!
+  miniMap && miniMap.updatePosition(fix.lat, fix.lon, fix.accuracy);
+  ar && ar.setNearbyBuildings(_allDestinations, fix.lat, fix.lon);
+
   if (!gpsNavActive || state.phase !== 'navigating') return;
   const route = state.activeRoute;
   if (!route?.polyline?.length) return;
@@ -678,20 +696,17 @@ function _handleGpsUpdate(fix) {
   const [fLat, fLon] = route.polyline[route.polyline.length - 1];
   const distToEnd = haversineDistance(fix.lat, fix.lon, fLat, fLon);
 
-  // Push new route state to AR overlay
-  ar && ar.setRoute(
-    route.polyline.slice(route.pointIndex), // upcoming portion only
-    fix.lat, fix.lon,
-    isFinal ? route.destLabel : '',
-    distToEnd
-  );
+  // Push live updates to mini-map and AR
+  miniMap && miniMap.updateRemainingDistance(distToEnd);
+  ar && ar.setActiveDestination(route.destLabel, fLat, fLon, distToEnd);
 
   // Arrival detection
   if (isFinal && distToNext <= arrivalRadius) {
     state.phase = 'arrived';
     els.routeControls.classList.add('hidden');
     _stopGpsNav();
-    ar && ar.clearRoute();
+    ar && ar.clearActiveDestination();
+    miniMap && miniMap.clearRoute();
     voice.speak(`You have arrived at ${route.destLabel}.`, { key: 'arrived', interrupt: true });
     setStatus(`Arrived at ${route.destLabel}`);
     if (els.subtitle) els.subtitle.textContent = `Arrived at ${route.destLabel}`;
@@ -743,7 +758,8 @@ async function getFreshGpsFix() {
 function handleStopRequested() {
   state.phase = 'idle';
   state.activeRoute = null;
-  ar && ar.clearRoute();
+  ar && ar.clearActiveDestination();
+  miniMap && miniMap.clearRoute();
   ar && ar.clearBubble();
   els.routeControls.classList.add('hidden');
   if (els.subtitle) els.subtitle.textContent = '';

@@ -139,14 +139,18 @@ class MapDiscovery {
       const elLon = el.type === 'way' ? el.center?.lon : el.lon;
       if (!elLat || !elLon) continue;
 
+      const rawType = el.tags?.amenity || el.tags?.building || el.tags?.shop
+            || el.tags?.barrier || el.tags?.highway || el.tags?.leisure
+            || el.tags?.tourism || el.tags?.office || 'place';
+      const purpose = _derivePurpose(name, el.tags || {});
+
       results.push({
         id: `${el.type}/${el.id}`,
         name,
         lat: elLat,
         lon: elLon,
-        type: el.tags?.amenity || el.tags?.building || el.tags?.shop
-              || el.tags?.barrier || el.tags?.highway || el.tags?.leisure
-              || el.tags?.tourism || el.tags?.office || 'place',
+        type: rawType,
+        purpose,
         tags: el.tags || {},
       });
     }
@@ -286,6 +290,27 @@ function _haversineMeters(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2
     + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function _derivePurpose(name, tags) {
+  const n = (name || '').toLowerCase();
+  const amenity = (tags.amenity || '').toLowerCase();
+  const building = (tags.building || '').toLowerCase();
+  const shop = (tags.shop || '').toLowerCase();
+  const barrier = (tags.barrier || '').toLowerCase();
+
+  if (n.includes('library') || amenity === 'library') return 'Academic Library & Research Study Halls';
+  if (n.includes('hostel') || n.includes('block') || building === 'dormitory' || building === 'residential') return 'Student Residence & Living Quarters';
+  if (n.includes('mess') || n.includes('canteen') || n.includes('food') || ['canteen', 'food_court', 'restaurant', 'cafe', 'fast_food'].includes(amenity)) return 'Dining Hall & Meal Services';
+  if (n.includes('gate') || barrier === 'gate') return 'Campus Entry & Security Checkpoint';
+  if (n.includes('store') || n.includes('mart') || shop) return 'Stationery, Grocery & Daily Student Essentials';
+  if (n.includes('audi') || amenity === 'theatre' || building === 'auditorium') return 'Conferences, Cultural Events & Assemblies';
+  if (n.includes('lab') || building === 'university' || building === 'college') return 'Academic Departments, Lecture Halls & Labs';
+  if (n.includes('guest') || tags.tourism === 'hotel') return 'Visitor & Guest Accommodation';
+  if (n.includes('park') || tags.leisure) return 'Student Recreation & Green Space';
+  if (amenity === 'hospital' || amenity === 'clinic' || amenity === 'pharmacy') return 'Campus Health Centre & First Aid';
+  if (amenity === 'bank' || amenity === 'atm') return 'Financial Services & Automated Teller Machine';
+  return 'University Campus Building & Facility';
 }
 
 window.MapDiscovery = MapDiscovery;

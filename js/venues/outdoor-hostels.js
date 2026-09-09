@@ -75,26 +75,24 @@
   };
 
   const NODES = [
-    // Block names — broad, geocode-friendly fallback destinations.
-    gpsNode('hostel_g', 'Ladies Hostel G', ['hostel g', 'g hostel', 'g block', 'block g', 'ladies hostel g', 'socrates block'], true),
-    gpsNode('hostel_h', 'Ladies Hostel H', ['hostel h', 'h hostel', 'h block', 'block h', 'ladies hostel h'], true),
-    gpsNode('hostel_j', 'Ladies Hostel J', ['hostel j', 'j hostel', 'j block', 'block j', 'ladies hostel j'], true),
+    // Block names with clear purposes
+    gpsNode('hostel_g', 'Ladies Hostel G', ['hostel g', 'g hostel', 'g block', 'block g', 'ladies hostel g', 'socrates block'], true, 'Student Residence & Living Quarters'),
+    gpsNode('hostel_h', 'Ladies Hostel H', ['hostel h', 'h hostel', 'h block', 'block h', 'ladies hostel h'], true, 'Student Residence & Living Quarters'),
+    gpsNode('hostel_j', 'Ladies Hostel J', ['hostel j', 'j hostel', 'j block', 'block j', 'ladies hostel j'], true, 'Student Residence & Living Quarters'),
 
-    // Specific entrances from the sketch — these are the ones worth
-    // calibrating precisely, since "the hostel" geocodes to a building
-    // centroid, not a specific door.
-    gpsNode('g_main_entrance', "G block's main entrance", ['g main entrance', 'g block main entrance', 'main entrance of g block'], true),
-    gpsNode('g_side_entrance', "G block's side entrance", ['g side entrance', 'g block side entrance'], true),
-    gpsNode('j_main_entrance', "J block's main entrance", ['j main entrance', 'j block main entrance', 'main entrance of j block'], true),
-    gpsNode('j_side_lift_entrance', "J block's lift and side entrance", ['j side entrance', 'j lift entrance', 'j block lift', 'lift entrance'], true),
-    gpsNode('mess_entrance', 'the mess entrance', ['mess entrance', 'mess', 'dining hall entrance'], true),
+    // Specific entrances & amenities
+    gpsNode('g_main_entrance', "G block's main entrance", ['g main entrance', 'g block main entrance', 'main entrance of g block'], true, 'Primary residence foyer & entry'),
+    gpsNode('g_side_entrance', "G block's side entrance", ['g side entrance', 'g block side entrance'], true, 'Side walkway to mess & courtyard'),
+    gpsNode('j_main_entrance', "J block's main entrance", ['j main entrance', 'j block main entrance', 'main entrance of j block'], true, 'Main reception & foyer of J block'),
+    gpsNode('j_side_lift_entrance', "J block's lift and side entrance", ['j side entrance', 'j lift entrance', 'j block lift', 'lift entrance'], true, 'Direct elevator access to upper residential floors'),
+    gpsNode('mess_entrance', 'Hostel Dining Mess', ['mess entrance', 'mess', 'dining hall entrance'], true, 'Dining Hall & meal services for residents'),
 
-    // Other landmarks from the sketch.
-    gpsNode('main_gate', 'the main gate for G, H and J hostels', ['main gate', 'the gate', 'hostel gate'], true),
-    gpsNode('convenience_store_north', 'the convenience store near J block', ['convenience store', 'the shop', 'north convenience store'], true),
-    gpsNode('convenience_store_south', 'the other convenience store', ['second convenience store', 'south convenience store'], true),
-    gpsNode('guest_house', 'the guest house', ['guest house', 'guesthouse'], true),
-    gpsNode('bicycle_parking', 'the bicycle parking area', ['bicycle parking', 'bike parking', 'cycle stand']),
+    // Key landmarks & facilities
+    gpsNode('main_gate', 'Hostel Complex Main Gate', ['main gate', 'the gate', 'hostel gate'], true, 'Campus road entry & 24/7 security checkpoint'),
+    gpsNode('convenience_store_north', 'North Convenience Store', ['convenience store', 'the shop', 'north convenience store'], true, 'Snacks, groceries & daily student essentials'),
+    gpsNode('convenience_store_south', 'South Convenience Store', ['second convenience store', 'south convenience store'], true, 'Stationery, print services & supplies'),
+    gpsNode('guest_house', 'Campus Guest House', ['guest house', 'guesthouse'], true, 'Visitor accommodation & VIP suites'),
+    gpsNode('bicycle_parking', 'Bicycle Parking Stand', ['bicycle parking', 'bike parking', 'cycle stand'], false, 'Campus cycle parking & mobility stand'),
   ];
 
   // No fixed edges — a route between any two points is fetched live via

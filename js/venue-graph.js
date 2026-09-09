@@ -39,8 +39,8 @@ function initialBearing(lat1, lon1, lat2, lon2) {
 
 /** GPS waypoint node — coordinates start uncalibrated (null) on purpose.
  *  Used by outdoor-hostels.js to register known named anchor points. */
-function gpsNode(id, label, aliases, isDoor) {
-  return { id, label, aliases: aliases || [], lat: null, lon: null, isDoor: !!isDoor, isGps: true };
+function gpsNode(id, label, aliases, isDoor, purpose) {
+  return { id, label, aliases: aliases || [], lat: null, lon: null, isDoor: !!isDoor, isGps: true, purpose: purpose || '' };
 }
 
 function gpsEdge(a, b) {
