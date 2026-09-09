@@ -1,56 +1,57 @@
 /**
- * ar.js — Augmented Reality Building & Landmark Inspector
+ * ar.js — Augmented Reality Road Path & Landmark Reticle System
  * -----------------------------------------------------------------------
- * Replaces synthetic ground ribbons with TRUE LOCATION-BASED AR ANCHORING:
+ * Modeled after visual AR navigation systems (e.g. Google Live View & ARKit):
  *
- * 1. BUILDING ANCHORS & PURPOSE OVERLAYS:
- *    When you point your camera at or near a building:
- *    - Projects a floating AR label card positioned over the real building structure.
- *    - Displays: Building Name, Distance (m), and Main Purpose / Function.
- *    - Downward-pointing arrow/beacon points directly at the physical building.
- *    - Highlights active navigation destinations with glowing emerald/gold accents.
- *    - If destination is behind or off-screen, draws edge guidance arrows (◀ / ▶)
- *      telling the user which way to turn.
+ * 1. PERSPECTIVE ROAD PATHWAY (from reference images 1 & 2):
+ *    - Translucent white walking corridor painted on the road surface.
+ *    - Central teal/cyan lane line (#00e5cc) following road geometry.
+ *    - Flowing white arrow chevrons along the corridor directing the user forward.
+ *    - Tapers off with true ground-plane perspective towards the horizon.
+ *    - Active street / destination label projected directly onto the pathway.
  *
- * 2. OUTLINING AR:
- *    Bounding boxes around detected people, vehicles, and hazards from hazards.js.
+ * 2. CIRCULAR LANDMARK TARGET RETICLES (from reference images 3 & 5):
+ *    - Dotted pulsing circular target ring (⭕) centered on landmarks/buildings.
+ *    - Clean floating typography above the ring (e.g. "AZ Tower", "Ladies Hostel J").
+ *    - Distance tag and purpose pill.
  *
- * 3. LANDMARK AMBIENT BUBBLES:
- *    Ambient "You might be near X" detection pills.
+ * 3. OBSTACLE OUTLINES & SAFETY:
+ *    - Retains COCO-SSD hazard outlines and safety notices.
  * -----------------------------------------------------------------------
  */
 
-const DEFAULT_FOV_H = 60; // horizontal camera field of view in degrees
-const MAX_BUILDING_REVEAL_DIST = 400; // max meters to render AR building cards
+const DEFAULT_FOV_H = 60; // camera horizontal field of view
+const MAX_PATH_DISTANCE = 150; // meters ahead to draw road corridor
 
 class ArOverlay {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
 
-    // Heading and orientation
+    // Orientation
     this.heading = null;
     this.hasLiveHeading = false;
 
-    // Location & buildings
+    // GPS & Navigation
     this.currentLat = null;
     this.currentLon = null;
-    this.nearbyBuildings = [];
+    this.routePolyline = null; // [[lat, lon], ...]
+    this.destLabel = '';
+    this.distanceRemaining = null;
     this.activeDestination = null; // { name, lat, lon }
-    this.routeDistanceMeters = null;
+    this.nearbyBuildings = [];
 
-    // Detected obstacle bounding boxes
+    // Hazards & Detections
     this.detectedObjects = [];
     this.detectedVideoSize = { w: 1, h: 1 };
-
-    // Ambient bubble and debug
     this.bubbleText = null;
     this.debugInfo = null;
 
-    // Rendering params
+    // Animation phases
     this.dpr = window.devicePixelRatio || 1;
     this.fovH = DEFAULT_FOV_H;
-    this._bobPhase = 0;
+    this._flowPhase = 0;
+    this._ringAngle = 0;
     this._rafId = null;
 
     this._onOrientation = this._onOrientation.bind(this);
@@ -81,31 +82,43 @@ class ArOverlay {
     if (this._rafId) cancelAnimationFrame(this._rafId);
   }
 
-  /**
-   * Updates user's current GPS location and list of buildings in the area.
-   */
+  setRoute(polyline, lat, lon, destLabel, distanceRemaining) {
+    this.currentLat = lat;
+    this.currentLon = lon;
+    this.routePolyline = Array.isArray(polyline) && polyline.length > 1 ? polyline : null;
+    this.destLabel = destLabel || '';
+    this.distanceRemaining = distanceRemaining;
+    if (polyline && polyline.length) {
+      const target = polyline[polyline.length - 1];
+      this.activeDestination = { name: destLabel, lat: target[0], lon: target[1] };
+    }
+  }
+
+  clearRoute() {
+    this.routePolyline = null;
+    this.destLabel = '';
+    this.distanceRemaining = null;
+    this.activeDestination = null;
+  }
+
   setNearbyBuildings(buildings, lat, lon) {
     this.nearbyBuildings = Array.isArray(buildings) ? buildings : [];
     this.currentLat = lat;
     this.currentLon = lon;
   }
 
-  /**
-   * Sets the active navigation target for highlight & edge-of-screen guidance.
-   */
-  setActiveDestination(destName, lat, lon, distanceMeters) {
+  setActiveDestination(destName, lat, lon, dist) {
     if (!destName) {
       this.activeDestination = null;
-      this.routeDistanceMeters = null;
       return;
     }
     this.activeDestination = { name: destName, lat, lon };
-    this.routeDistanceMeters = distanceMeters;
+    this.destLabel = destName;
+    this.distanceRemaining = dist;
   }
 
   clearActiveDestination() {
-    this.activeDestination = null;
-    this.routeDistanceMeters = null;
+    this.clearRoute();
   }
 
   setDetectedObjects(boxes, vw, vh) {
@@ -116,20 +129,9 @@ class ArOverlay {
   showBubble(text)   { this.bubbleText = text; }
   clearBubble()      { this.bubbleText = null; }
   setDebugInfo(text) { this.debugInfo = text; }
-
-  // Backward-compatible stubs so existing app calls don't crash
-  setRoute(polyline, lat, lon, destLabel, dist) {
-    this.currentLat = lat;
-    this.currentLon = lon;
-    if (destLabel && polyline && polyline.length) {
-      const destPt = polyline[polyline.length - 1];
-      this.setActiveDestination(destLabel, destPt[0], destPt[1], dist);
-    }
-  }
-  clearRoute() { this.clearActiveDestination(); }
   setTarget() {}
   setPath() {}
-  clearTarget() { this.clearActiveDestination(); }
+  clearTarget() { this.clearRoute(); }
 
   _onOrientation(e) {
     if (typeof e.webkitCompassHeading === 'number') {
@@ -146,7 +148,8 @@ class ArOverlay {
 
   _raf() {
     this._draw();
-    this._bobPhase = (this._bobPhase + 0.035) % (Math.PI * 2);
+    this._flowPhase = (this._flowPhase + 0.018) % 1;
+    this._ringAngle = (this._ringAngle + 0.02) % (Math.PI * 2);
     this._rafId = requestAnimationFrame(() => this._raf());
   }
 
@@ -163,247 +166,245 @@ class ArOverlay {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
 
-    const topOffset = (document.getElementById('top-bar')?.offsetHeight || 64) + 12;
-    const botOffset = (document.getElementById('voice-hub')?.offsetHeight || 130) + 12;
+    const topOffset = (document.getElementById('top-bar')?.offsetHeight || 64) + 10;
+    const botOffset = (document.getElementById('voice-hub')?.offsetHeight || 130) + 10;
 
-    // 1. Ambient landmark bubble
-    if (this.bubbleText) {
-      this._drawBubble(w, topOffset);
-    }
-
-    // 2. Obstacle detection outlines
-    if (this.detectedObjects?.length) {
-      this._drawDetectionOutlines(w, h);
-    }
-
-    // 3. Debug readout
-    if (this.debugInfo) {
-      this._drawDebugInfo(w, h);
-    }
-
-    // 4. AR Building Labels & Pointing Arrows
-    this._drawBuildingOverlays(w, h, topOffset, botOffset);
-
-    ctx.restore();
-  }
-
-  // ------------------------------------------------------------------
-  // AR Building Labels & Arrow Overlays
-  // ------------------------------------------------------------------
-  _drawBuildingOverlays(w, h, topOffset, botOffset) {
-    if (this.currentLat === null || this.currentLon === null) return;
-
-    // Resolve heading: if live compass isn't reporting, align with active destination
+    // Resolve current compass heading
     let heading = this.heading;
     if (heading === null) {
-      if (this.activeDestination && this.activeDestination.lat != null) {
+      if (this.routePolyline && this.currentLat != null && this.routePolyline.length > 1) {
+        heading = _initialBearing(this.currentLat, this.currentLon, this.routePolyline[1][0], this.routePolyline[1][1]);
+      } else if (this.activeDestination && this.currentLat != null) {
         heading = _initialBearing(this.currentLat, this.currentLon, this.activeDestination.lat, this.activeDestination.lon);
       } else {
         heading = 0;
       }
     }
-    const halfFov = this.fovH / 2;
 
-    // RULE 1: If navigating to a destination, FOCUS ONLY ON THE DESTINATION!
-    // Never clutter the view with 10 other buildings when the user has an active route.
-    let candidates = [];
+    // 1. Perspective Road Pathway Overlay (Images 1 & 2)
+    if (this.routePolyline && this.currentLat !== null) {
+      this._drawRoadPathway(heading, w, h, topOffset, botOffset);
+    }
+
+    // 2. Dotted Circular Landmark Target Reticles (Images 3 & 5)
+    this._drawLandmarkReticles(heading, w, h, topOffset, botOffset);
+
+    // 3. Obstacle outline detection boxes
+    if (this.detectedObjects?.length) {
+      this._drawDetectionOutlines(w, h);
+    }
+
+    // 4. Ambient bubble
+    if (this.bubbleText) {
+      this._drawBubble(w, topOffset);
+    }
+
+    ctx.restore();
+  }
+
+  // ------------------------------------------------------------------
+  // 1. Perspective Road Pathway Ribbon (Images 1 & 2)
+  // ------------------------------------------------------------------
+  _drawRoadPathway(heading, w, h, topOffset, botOffset) {
+    const { ctx } = this;
+    const polyline = this.routePolyline;
+    if (!polyline || polyline.length < 2) return;
+
+    const halfFov = this.fovH / 2;
+    const usableH = h - topOffset - botOffset;
+    const horizonY = topOffset + usableH * 0.44; // horizon line
+    const footY = h - botOffset - 8;             // starting point right at feet
+
+    // Project points from current position forward
+    const projected = [];
+    for (let i = 0; i < polyline.length && projected.length < 18; i++) {
+      const [pLat, pLon] = polyline[i];
+      const dist = _haversine(this.currentLat, this.currentLon, pLat, pLon);
+      if (dist > MAX_PATH_DISTANCE) break;
+
+      const bearing = _initialBearing(this.currentLat, this.currentLon, pLat, pLon);
+      let rel = bearing - heading;
+      rel = ((rel + 540) % 360) - 180;
+
+      // Project onto ground-plane
+      const t = Math.min(1, Math.sqrt(dist / MAX_PATH_DISTANCE));
+      const py = footY - t * (footY - horizonY);
+      const px = w / 2 + (rel / halfFov) * (w / 2);
+
+      // Width of the road pathway tapers into the distance
+      const roadHalfW = (w * 0.28) * (1 - t * 0.88) + (w * 0.03) * t;
+
+      projected.push({ x: px, y: py, halfW: roadHalfW, dist });
+    }
+
+    if (projected.length < 2) return;
+
+    const anchor = { x: w / 2, y: footY, halfW: w * 0.28 };
+
+    // ---- A. Translucent White Outer Pavement Ribbon (Images 1 & 2) ----
+    const leftEdge = [{ x: anchor.x - anchor.halfW, y: anchor.y }];
+    const rightEdge = [{ x: anchor.x + anchor.halfW, y: anchor.y }];
+
+    for (const p of projected) {
+      leftEdge.push({ x: p.x - p.halfW, y: p.y });
+      rightEdge.push({ x: p.x + p.halfW, y: p.y });
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    _traceSmooth(ctx, leftEdge, false);
+    _traceSmooth(ctx, [...rightEdge].reverse(), true);
+    ctx.closePath();
+
+    // Solid clean white roadway fill with subtle border
+    ctx.fillStyle = 'rgba(248, 250, 252, 0.72)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.stroke();
+
+    // ---- B. Vibrant Teal Centerline Strip ----
+    const centerLeft = [{ x: anchor.x - anchor.halfW * 0.45, y: anchor.y }];
+    const centerRight = [{ x: anchor.x + anchor.halfW * 0.45, y: anchor.y }];
+
+    for (const p of projected) {
+      centerLeft.push({ x: p.x - p.halfW * 0.45, y: p.y });
+      centerRight.push({ x: p.x + p.halfW * 0.45, y: p.y });
+    }
+
+    ctx.beginPath();
+    _traceSmooth(ctx, centerLeft, false);
+    _traceSmooth(ctx, [...centerRight].reverse(), true);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 204, 187, 0.88)'; // vibrant teal lane from reference image
+    ctx.fill();
+
+    // ---- C. Flowing White Arrow Chevrons (> > >) ----
+    const centerPoints = [{ x: anchor.x, y: anchor.y }, ...projected.map(p => ({ x: p.x, y: p.y }))];
+    const CHEVRON_COUNT = 6;
+    for (let i = 0; i < CHEVRON_COUNT; i++) {
+      const p = (i / CHEVRON_COUNT + this._flowPhase) % 1;
+      const pt = _pointOnPolyline(centerPoints, p);
+      const widthAtPoint = anchor.halfW * 0.42 * (1 - p * 0.78);
+      _drawForwardChevron(ctx, pt.x, pt.y, pt.angle, widthAtPoint);
+    }
+
+    // ---- D. Street / Destination Label on Road Surface (Image 2) ----
+    if (this.destLabel && projected.length > 2) {
+      const labelPt = projected[1];
+      ctx.save();
+      ctx.font = '900 16px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+      ctx.shadowBlur = 4;
+      ctx.fillText(this.destLabel, labelPt.x, labelPt.y - 12);
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  // ------------------------------------------------------------------
+  // 2. Dotted Circular Landmark Target Reticle (Images 3 & 5)
+  // ------------------------------------------------------------------
+  _drawLandmarkReticles(heading, w, h, topOffset, botOffset) {
+    if (this.currentLat === null || this.currentLon === null) return;
+    const halfFov = this.fovH / 2;
+    const { ctx } = this;
+
+    // Targets to display (active destination, or closest building within 80m)
+    let targets = [];
     if (this.activeDestination && this.activeDestination.lat != null) {
-      candidates = [{
+      targets = [{
         name: this.activeDestination.name,
         lat: this.activeDestination.lat,
         lon: this.activeDestination.lon,
-        purpose: 'Target Destination',
-        isDestination: true,
+        isDest: true,
       }];
     } else {
-      // Free exploration mode: only consider buildings within 75 meters!
-      candidates = this.nearbyBuildings.filter(b => {
-        if (!b.lat || !b.lon) return false;
-        const d = _haversine(this.currentLat, this.currentLon, b.lat, b.lon);
-        return d <= 75; // strict distance filter
-      });
+      // Explore mode: show closest building in front of camera (< 80m)
+      const inFront = this.nearbyBuildings
+        .filter(b => b.lat && b.lon)
+        .map(b => {
+          const dist = _haversine(this.currentLat, this.currentLon, b.lat, b.lon);
+          const bearing = _initialBearing(this.currentLat, this.currentLon, b.lat, b.lon);
+          let rel = bearing - heading;
+          rel = ((rel + 540) % 360) - 180;
+          return { ...b, dist, rel };
+        })
+        .filter(b => b.dist < 80 && Math.abs(b.rel) <= halfFov * 1.05)
+        .sort((a, b) => a.dist - b.dist);
+
+      if (inFront.length) targets = [inFront[0]]; // pick single primary building
     }
 
-    // Calculate screen projection for each candidate
-    const visibleCards = [];
-    let destOffScreenSide = null; // 'left' or 'right' if destination is out of FOV
-    let destOffScreenAngle = 0;
-
-    for (const b of candidates) {
-      if (!b.lat || !b.lon) continue;
-      const dist = _haversine(this.currentLat, this.currentLon, b.lat, b.lon);
-
-      const bearing = _initialBearing(this.currentLat, this.currentLon, b.lat, b.lon);
+    for (const target of targets) {
+      const dist = _haversine(this.currentLat, this.currentLon, target.lat, target.lon);
+      const bearing = _initialBearing(this.currentLat, this.currentLon, target.lat, target.lon);
       let rel = bearing - heading;
-      rel = ((rel + 540) % 360) - 180; // -180 to 180
+      rel = ((rel + 540) % 360) - 180;
 
-      const isDest = this.activeDestination && (
-        b.name === this.activeDestination.name || b.isDestination
-      );
-
-      // Check if inside camera horizontal FOV
-      if (Math.abs(rel) <= halfFov * 1.05) {
-        const screenX = w / 2 + (rel / halfFov) * (w / 2);
-
-        // Position comfortably in mid-viewport, away from top-bar and mini-map
-        const usableH = h - topOffset - botOffset;
-        const screenY = topOffset + usableH * 0.46 + Math.sin(this._bobPhase) * 3;
-
-        visibleCards.push({
-          building: b,
-          dist,
-          x: screenX,
-          y: screenY,
-          isDest,
-        });
-      } else if (isDest) {
-        // Destination is outside FOV — track which side to show turn arrow
-        destOffScreenSide = rel > 0 ? 'right' : 'left';
-        destOffScreenAngle = Math.abs(Math.round(rel));
+      // If outside FOV, show edge turn guide
+      if (Math.abs(rel) > halfFov * 1.05) {
+        if (target.isDest) {
+          const isRight = rel > 0;
+          const arrow = isRight ? '▶' : '◀';
+          ctx.save();
+          ctx.fillStyle = 'rgba(0, 204, 187, 0.9)';
+          _roundRect(ctx, isRight ? w - 85 : 10, h * 0.44, 75, 30, 15);
+          ctx.fill();
+          ctx.font = 'bold 12px sans-serif';
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`${arrow} ${Math.abs(Math.round(rel))}°`, isRight ? w - 47 : 47, h * 0.44 + 15);
+          ctx.restore();
+        }
+        continue;
       }
+
+      // Inside FOV: Draw Circular Dotted Reticle (Image 5 - AZ Tower)
+      const screenX = w / 2 + (rel / halfFov) * (w / 2);
+      const screenY = topOffset + (h - topOffset - botOffset) * 0.36;
+      const ringRadius = Math.max(28, Math.min(48, 48 - (dist / 100) * 16));
+
+      ctx.save();
+      ctx.translate(screenX, screenY);
+
+      // ---- Dotted Circular Target Ring ----
+      ctx.beginPath();
+      ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([4, 4]); // dotted circle from image 3 & 5
+      ctx.strokeStyle = target.isDest ? '#00e5cc' : 'rgba(255, 255, 255, 0.85)';
+      ctx.stroke();
+      ctx.setLineDash([]); // reset dash
+
+      // Glowing Center Dot
+      ctx.beginPath();
+      ctx.arc(0, 0, 4, 0, Math.PI * 2);
+      ctx.fillStyle = target.isDest ? '#00e5cc' : '#ffffff';
+      ctx.fill();
+
+      // ---- Clean Typography Above Reticle (Image 5) ----
+      ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+      ctx.shadowBlur = 6;
+      ctx.fillText(target.name || 'Building', 0, -ringRadius - 10);
+
+      // Distance Tag below
+      const distText = dist < 1000 ? `${Math.round(dist)} m` : `${(dist / 1000).toFixed(1)} km`;
+      ctx.font = 'bold 11px monospace';
+      ctx.fillStyle = target.isDest ? '#00e5cc' : 'rgba(255, 255, 255, 0.85)';
+      ctx.fillText(distText, 0, -ringRadius - 28);
+
+      ctx.restore();
     }
-
-    // Sort by distance (closest first)
-    visibleCards.sort((a, b) => a.dist - b.dist);
-
-    // RULE 2: Declutter & prevent stacking.
-    // If two cards are horizontally close (within 150px), keep ONLY the closer one!
-    const filteredCards = [];
-    for (const card of visibleCards) {
-      if (filteredCards.length >= 2) break; // at most 2 cards on screen at any time!
-      const overlaps = filteredCards.some(existing => Math.abs(existing.x - card.x) < 160);
-      if (!overlaps) {
-        filteredCards.push(card);
-      }
-    }
-
-    // Render each building card and arrow
-    for (const item of filteredCards) {
-      this._drawSingleBuildingCard(item, w, h);
-    }
-
-    // If destination is off-screen, render turn indicator arrow
-    if (destOffScreenSide && this.activeDestination) {
-      this._drawOffScreenTurnGuide(destOffScreenSide, destOffScreenAngle, w, h);
-    }
-  }
-
-  _drawSingleBuildingCard(item, screenW, screenH) {
-    const { ctx } = this;
-    const { building, dist, x, y, isDest } = item;
-
-    const title = building.name || 'Building';
-    const purpose = building.purpose || 'Campus Facility & Structure';
-    const distText = dist < 1000 ? `${Math.round(dist)} m` : `${(dist / 1000).toFixed(1)} km`;
-
-    // Calculate dimensions
-    ctx.save();
-    ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    const titleW = ctx.measureText(title).width;
-    const badgeW = ctx.measureText(distText).width + 12;
-
-    ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    const purposeW = ctx.measureText(purpose).width;
-
-    const cardW = Math.max(160, Math.max(titleW + badgeW + 30, purposeW + 24));
-    const cardH = 54;
-    const cardX = Math.max(12, Math.min(screenW - cardW - 12, x - cardW / 2));
-    const cardY = y - cardH - 16; // positioned above the arrow anchor
-
-    // ---- 1. Downward Pointing Beacon Arrow ----
-    const arrowTipX = x;
-    const arrowTipY = y;
-    const arrowBaseY = cardY + cardH;
-
-    ctx.beginPath();
-    ctx.moveTo(arrowTipX, arrowTipY);
-    ctx.lineTo(arrowTipX - 7, arrowBaseY);
-    ctx.lineTo(arrowTipX + 7, arrowBaseY);
-    ctx.closePath();
-    ctx.fillStyle = isDest ? '#10b981' : '#00e5cc';
-    ctx.fill();
-
-    // Pulsing target dot at arrow tip
-    ctx.beginPath();
-    ctx.arc(arrowTipX, arrowTipY, 4, 0, Math.PI * 2);
-    ctx.fillStyle = isDest ? '#34d399' : '#38bdf8';
-    ctx.fill();
-
-    // ---- 2. Glassmorphic Card Container ----
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
-    ctx.shadowBlur = 12;
-    ctx.shadowOffsetY = 4;
-
-    // Background box
-    _roundRect(ctx, cardX, cardY, cardW, cardH, 10);
-    ctx.fillStyle = isDest
-      ? 'rgba(6, 44, 34, 0.92)' // emerald tint for active destination
-      : 'rgba(15, 23, 42, 0.88)'; // dark slate frosted
-    ctx.fill();
-
-    // Neon Accent Border
-    ctx.lineWidth = isDest ? 2.2 : 1.4;
-    ctx.strokeStyle = isDest ? '#10b981' : 'rgba(0, 229, 204, 0.75)';
-    ctx.stroke();
-
-    ctx.shadowBlur = 0; // reset shadow
-
-    // ---- 3. Card Content ----
-    // Title
-    ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    const icon = isDest ? '🎯 ' : '🏢 ';
-    ctx.fillText(icon + title, cardX + 10, cardY + 9, cardW - badgeW - 20);
-
-    // Distance Badge (pill in top right of card)
-    const badgeX = cardX + cardW - badgeW - 8;
-    const badgeY = cardY + 7;
-    _roundRect(ctx, badgeX, badgeY, badgeW, 18, 9);
-    ctx.fillStyle = isDest ? 'rgba(16, 185, 129, 0.3)' : 'rgba(59, 130, 246, 0.25)';
-    ctx.fill();
-    ctx.strokeStyle = isDest ? '#10b981' : '#38bdf8';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.font = 'bold 10px monospace';
-    ctx.fillStyle = isDest ? '#6ee7b7' : '#7dd3fc';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(distText, badgeX + badgeW / 2, badgeY + 9);
-
-    // Purpose line (bottom of card)
-    ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    ctx.fillStyle = 'rgba(226, 232, 240, 0.85)';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(purpose, cardX + 10, cardY + 30, cardW - 20);
-
-    ctx.restore();
-  }
-
-  _drawOffScreenTurnGuide(side, angleDeg, w, h) {
-    const { ctx } = this;
-    ctx.save();
-
-    const isRight = side === 'right';
-    const x = isRight ? w - 24 : 24;
-    const y = h * 0.45;
-    const arrow = isRight ? '▶' : '◀';
-
-    // Glowing indicator pill
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.9)';
-    _roundRect(ctx, isRight ? w - 90 : 10, y - 16, 80, 32, 16);
-    ctx.fill();
-
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${arrow} ${angleDeg}°`, isRight ? w - 50 : 50, y);
-
-    ctx.restore();
   }
 
   // ------------------------------------------------------------------
@@ -480,23 +481,6 @@ class ArOverlay {
     ctx.fillText(this.bubbleText, w / 2, by + bubbleH / 2 + 1);
     ctx.restore();
   }
-
-  _drawDebugInfo(w, h) {
-    const { ctx } = this;
-    ctx.save();
-    ctx.font = '600 11px monospace';
-    const text = this.debugInfo;
-    const tw = ctx.measureText(text).width;
-    const boxH = 20;
-    const y = h - boxH - 10;
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(8, y, tw + 14, boxH);
-    ctx.fillStyle = '#34d399';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, 14, y + boxH / 2 + 1);
-    ctx.restore();
-  }
 }
 
 // ------------------------------------------------------------------
@@ -518,6 +502,52 @@ function _initialBearing(lat1, lon1, lat2, lon2) {
   const x = Math.cos(toR(lat1)) * Math.sin(toR(lat2))
     - Math.sin(toR(lat1)) * Math.cos(toR(lat2)) * Math.cos(toR(lon2 - lon1));
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+function _traceSmooth(ctx, points, continuePath) {
+  if (!points.length) return;
+  if (continuePath) ctx.lineTo(points[0].x, points[0].y);
+  else ctx.moveTo(points[0].x, points[0].y);
+  if (points.length < 2) return;
+  if (points.length === 2) { ctx.lineTo(points[1].x, points[1].y); return; }
+  for (let i = 1; i < points.length - 1; i++) {
+    const mx = (points[i].x + points[i + 1].x) / 2;
+    const my = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
+  }
+  ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+}
+
+function _pointOnPolyline(points, p) {
+  const n = points.length;
+  if (n === 1) return { x: points[0].x, y: points[0].y, angle: 0 };
+  const s = Math.max(0, Math.min(1, p)) * (n - 1);
+  const i0 = Math.min(Math.floor(s), n - 2);
+  const i1 = i0 + 1;
+  const t  = s - i0;
+  return {
+    x: points[i0].x + (points[i1].x - points[i0].x) * t,
+    y: points[i0].y + (points[i1].y - points[i0].y) * t,
+    angle: Math.atan2(points[i1].x - points[i0].x, -(points[i1].y - points[i0].y)),
+  };
+}
+
+function _drawForwardChevron(ctx, x, y, angle, width) {
+  const h = width * 0.7;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(0, -h);
+  ctx.lineTo(width / 2, h * 0.5);
+  ctx.lineTo(width * 0.25, h * 0.5);
+  ctx.lineTo(0, -h * 0.1);
+  ctx.lineTo(-width * 0.25, h * 0.5);
+  ctx.lineTo(-width / 2, h * 0.5);
+  ctx.closePath();
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.restore();
 }
 
 function _roundRect(ctx, x, y, w, h, r) {

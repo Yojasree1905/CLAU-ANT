@@ -630,9 +630,9 @@ async function _routeTo(dest) {
   voice.speak(msg, { key: 'route-start', interrupt: true });
   setStatus(`Route: ${dest.name}`);
 
-  // Display walking route on 3x3 Mini-Map and highlight in AR
+  // Display walking route on 3x3 Mini-Map and project road pathway in AR
   miniMap && miniMap.setRoute(route.points, dest.name, route.distanceMeters);
-  ar && ar.setActiveDestination(dest.name, dest.lat, dest.lon, route.distanceMeters);
+  ar && ar.setRoute(route.points, fix.lat, fix.lon, dest.name, route.distanceMeters);
 
   // Start GPS tracking along the route
   _startGpsNav();
@@ -696,9 +696,9 @@ function _handleGpsUpdate(fix) {
   const [fLat, fLon] = route.polyline[route.polyline.length - 1];
   const distToEnd = haversineDistance(fix.lat, fix.lon, fLat, fLon);
 
-  // Push live updates to mini-map and AR
+  // Push live updates to mini-map and AR road projection
   miniMap && miniMap.updateRemainingDistance(distToEnd);
-  ar && ar.setActiveDestination(route.destLabel, fLat, fLon, distToEnd);
+  ar && ar.setRoute(route.polyline.slice(route.pointIndex), fix.lat, fix.lon, route.destLabel, distToEnd);
 
   // Arrival detection
   if (isFinal && distToNext <= arrivalRadius) {
