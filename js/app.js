@@ -315,6 +315,7 @@ function _getKnownCampusPlaces() {
         lat: node.lat,
         lon: node.lon,
         isAnchor: true,
+        purpose: node.purpose || '',
       });
     }
   }
@@ -347,13 +348,17 @@ function _renderDestinationList(pois) {
     const badge = poi.isAnchor
       ? '<span style="font-size:0.7rem; background:rgba(0,200,180,0.2); color:#00e5cc; padding:2px 6px; border-radius:4px; margin-left:6px; font-weight:normal;">Campus</span>'
       : '';
+    const purposeTag = poi.purpose
+      ? `<div style="font-size:0.72rem; color:#99f6e4; margin-top:2px;">${poi.purpose}</div>`
+      : '';
     const sub = (poi.aliases && poi.aliases.length)
-      ? `<div style="font-size:0.75rem; opacity:0.6; margin-top:2px;">${poi.aliases.slice(0, 3).join(', ')}</div>`
+      ? `<div style="font-size:0.7rem; opacity:0.5; margin-top:1px;">${poi.aliases.slice(0, 3).join(', ')}</div>`
       : '';
 
     li.innerHTML = `
       <div style="display:flex; flex-direction:column; justify-content:center; text-align:left;">
         <div><strong>${poi.name}</strong>${badge}</div>
+        ${purposeTag}
         ${sub}
       </div>
       <span class="item-arrow">→</span>
@@ -559,7 +564,7 @@ async function handleDestinationRequest(phraseOrLabel) {
   if (outdoorVenue) {
     const gpsNode = resolveGpsNode(outdoorVenue.nodes, phraseOrLabel);
     if (gpsNode && gpsNode.lat !== null) {
-      await _routeTo({ name: gpsNode.label, lat: gpsNode.lat, lon: gpsNode.lon });
+      await _routeTo({ name: gpsNode.label, lat: gpsNode.lat, lon: gpsNode.lon, purpose: gpsNode.purpose || '' });
       return;
     }
   }
@@ -632,7 +637,7 @@ async function _routeTo(dest) {
 
   // Display walking route on 3x3 Mini-Map and project road pathway in AR
   miniMap && miniMap.setRoute(route.points, dest.name, route.distanceMeters);
-  ar && ar.setRoute(route.points, fix.lat, fix.lon, dest.name, route.distanceMeters);
+  ar && ar.setRoute(route.points, fix.lat, fix.lon, dest.name, route.distanceMeters, dest.purpose || '');
 
   // Start GPS tracking along the route
   _startGpsNav();

@@ -33,6 +33,80 @@ const OVERPASS_FILTERS = [
   '["office"]',
 ];
 
+// Exact surveyed campus POIs from map.osm (Ladies Hostel G, H, J, Guest House, Parking, Gate, Mess)
+const CAMPUS_SURVEYED_POIS = [
+  {
+    id: 'node/14165878677',
+    name: 'Ladies Hostel J',
+    lat: 12.9681335,
+    lon: 79.1591946,
+    type: 'dormitory',
+    purpose: 'Student Residence • Ladies Hostel J (17 Floors)',
+    tags: { 'building:levels': '17', name: 'J Block', amenity: 'dormitory' },
+    aliases: ['j block', 'hostel j', 'block j', 'j hostel']
+  },
+  {
+    id: 'way/1095528323',
+    name: 'Ladies Hostel H',
+    lat: 12.9680394,
+    lon: 79.1596759,
+    type: 'dormitory',
+    purpose: 'Student Residence • Ladies Hostel H (17 Floors)',
+    tags: { 'building:levels': '17', name: 'H Block', amenity: 'dormitory' },
+    aliases: ['h block', 'hostel h', 'block h', 'h hostel']
+  },
+  {
+    id: 'way/1095528324',
+    name: 'Ladies Hostel G',
+    lat: 12.9676012,
+    lon: 79.1594861,
+    type: 'dormitory',
+    purpose: 'Student Residence • Ladies Hostel G (17 Floors)',
+    tags: { 'building:levels': '17', name: 'G Block', amenity: 'dormitory' },
+    aliases: ['g block', 'hostel g', 'block g', 'g hostel', 'socrates block']
+  },
+  {
+    id: 'relation/21227412',
+    name: 'VIT Guest House',
+    lat: 12.9677940,
+    lon: 79.1588970,
+    type: 'guest_house',
+    purpose: 'Visitor & VIP Guest Accommodation',
+    tags: { tourism: 'guest_house', name: 'VIT Guest House' },
+    aliases: ['guest house', 'campus guest house', 'guesthouse']
+  },
+  {
+    id: 'node/5487048824',
+    name: 'Campus Parking Area',
+    lat: 12.9676287,
+    lon: 79.1592126,
+    type: 'parking',
+    purpose: 'Designated Vehicle & Visitor Parking Area',
+    tags: { amenity: 'parking' },
+    aliases: ['parking', 'car parking', 'parking lot']
+  },
+  {
+    id: 'node/14165878675',
+    name: 'Hostel Complex Main Gate',
+    lat: 12.9685617,
+    lon: 79.1594558,
+    type: 'gate',
+    purpose: 'Campus Road Entry & 24/7 Security Checkpoint',
+    tags: { barrier: 'gate' },
+    aliases: ['main gate', 'hostel gate', 'the gate', 'security gate']
+  },
+  {
+    id: 'node/14165878676',
+    name: 'Hostel Dining Mess',
+    lat: 12.9677647,
+    lon: 79.1595216,
+    type: 'canteen',
+    purpose: 'Dining Hall & Meal Services for Residents',
+    tags: { amenity: 'canteen' },
+    aliases: ['mess', 'dining hall', 'mess entrance', 'food court']
+  }
+];
+
 class MapDiscovery {
   constructor() {
     this._cache = null; // {fetchedAt, lat, lon, radius, results:[]}
@@ -49,17 +123,35 @@ class MapDiscovery {
    * Each result: { id, name, lat, lon, type, tags }
    */
   async searchNearby(lat, lon, radiusM = 800) {
+    let results = [];
     if (this._isCacheValid(lat, lon, radiusM)) {
-      return this._cache.results;
+      results = this._cache.results;
+    } else {
+      try {
+        results = await this._fetchOverpass(lat, lon, radiusM);
+        this._cache = {
+          fetchedAt: Date.now(),
+          lat, lon, radius: radiusM,
+          results,
+        };
+        this._saveCache();
+      } catch (e) {
+        results = [];
+      }
     }
 
-    const results = await this._fetchOverpass(lat, lon, radiusM);
-    this._cache = {
-      fetchedAt: Date.now(),
-      lat, lon, radius: radiusM,
-      results,
-    };
-    this._saveCache();
+    // Merge surveyed campus POIs if within range
+    const campusDist = _haversineMeters(lat, lon, 12.9680, 79.1593);
+    if (campusDist <= (radiusM + 1000)) {
+      const seen = new Set(results.map(r => r.name.toLowerCase()));
+      for (const cp of CAMPUS_SURVEYED_POIS) {
+        if (!seen.has(cp.name.toLowerCase())) {
+          results.unshift(cp);
+          seen.add(cp.name.toLowerCase());
+        }
+      }
+    }
+
     return results;
   }
 
@@ -75,7 +167,7 @@ class MapDiscovery {
     try {
       const nearby = await this.searchNearby(lat, lon, 1000);
       const match = this._fuzzyMatch(query, nearby);
-      if (match) return { name: match.name, lat: match.lat, lon: match.lon };
+      if (match) return { name: match.name, lat: match.lat, lon: match.lon, purpose: match.purpose || '' };
     } catch (_) {
       // Overpass failed or timed out — fall through to Nominatim
     }

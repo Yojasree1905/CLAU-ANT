@@ -82,7 +82,7 @@ class ArOverlay {
     if (this._rafId) cancelAnimationFrame(this._rafId);
   }
 
-  setRoute(polyline, lat, lon, destLabel, distanceRemaining) {
+  setRoute(polyline, lat, lon, destLabel, distanceRemaining, destPurpose = '') {
     this.currentLat = lat;
     this.currentLon = lon;
     this.routePolyline = Array.isArray(polyline) && polyline.length > 1 ? polyline : null;
@@ -90,7 +90,12 @@ class ArOverlay {
     this.distanceRemaining = distanceRemaining;
     if (polyline && polyline.length) {
       const target = polyline[polyline.length - 1];
-      this.activeDestination = { name: destLabel, lat: target[0], lon: target[1] };
+      let purpose = destPurpose;
+      if (!purpose && this.nearbyBuildings && this.nearbyBuildings.length) {
+        const match = this.nearbyBuildings.find(b => b.name && b.name.toLowerCase() === destLabel.toLowerCase());
+        if (match) purpose = match.purpose || '';
+      }
+      this.activeDestination = { name: destLabel, lat: target[0], lon: target[1], purpose: purpose || '' };
     }
   }
 
@@ -308,6 +313,8 @@ class ArOverlay {
   // ------------------------------------------------------------------
   // 2. Dotted Circular Landmark Target Reticle (Images 3 & 5)
   // ------------------------------------------------------------------
+  // 2. Dotted Circular Landmark Reticle & Overlayed Purpose Box (with Arrow)
+  // ------------------------------------------------------------------
   _drawLandmarkReticles(heading, w, h, topOffset, botOffset) {
     if (this.currentLat === null || this.currentLon === null) return;
     const halfFov = this.fovH / 2;
@@ -323,6 +330,7 @@ class ArOverlay {
           name: this.activeDestination.name,
           lat: this.activeDestination.lat,
           lon: this.activeDestination.lon,
+          purpose: this.activeDestination.purpose || '',
           dist,
           isDest: true,
         }];
@@ -354,22 +362,22 @@ class ArOverlay {
 
       // STRICT CAMERA CHECK: If not aiming within camera FOV, DO NOT SHOW ON SCREEN!
       if (Math.abs(rel) > halfFov * 0.85) {
-        continue; // Completely hidden if not pointing at it!
+        continue; // Completely hidden if not pointing directly at it!
       }
 
-      // Inside Camera View: Draw Circular Dotted Reticle (Image 5 - AZ Tower)
+      // Inside Camera View: Draw Circular Dotted Reticle + Overlayed Purpose Box + Arrow
       const screenX = w / 2 + (rel / halfFov) * (w / 2);
-      const screenY = topOffset + (h - topOffset - botOffset) * 0.36;
-      const ringRadius = Math.max(26, Math.min(44, 44 - (dist / 85) * 14));
+      const screenY = topOffset + (h - topOffset - botOffset) * 0.44;
+      const ringRadius = Math.max(22, Math.min(38, 38 - (dist / 85) * 12));
 
       ctx.save();
       ctx.translate(screenX, screenY);
 
-      // ---- Dotted Circular Target Ring ----
+      // ---- 1. Dotted Circular Target Ring on Building Point ----
       ctx.beginPath();
       ctx.arc(0, 0, ringRadius, 0, Math.PI * 2);
       ctx.lineWidth = 2.5;
-      ctx.setLineDash([4, 4]); // dotted circle from image 3 & 5
+      ctx.setLineDash([4, 4]); // dotted circle
       ctx.strokeStyle = target.isDest ? '#00e5cc' : 'rgba(255, 255, 255, 0.9)';
       ctx.stroke();
       ctx.setLineDash([]); // reset dash
@@ -378,22 +386,102 @@ class ArOverlay {
       ctx.beginPath();
       ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
       ctx.fillStyle = target.isDest ? '#00e5cc' : '#ffffff';
+      ctx.shadowColor = target.isDest ? '#00e5cc' : '#ffffff';
+      ctx.shadowBlur = 8;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // ---- 2. Downward Arrow Pointing to Reticle Center ----
+      const arrowTipY = -ringRadius - 2;
+      const arrowBaseY = -ringRadius - 12;
+      ctx.beginPath();
+      ctx.moveTo(-6, arrowBaseY);
+      ctx.lineTo(6, arrowBaseY);
+      ctx.lineTo(0, arrowTipY);
+      ctx.closePath();
+      ctx.fillStyle = target.isDest ? '#00e5cc' : '#ffffff';
       ctx.fill();
 
-      // ---- Clean Typography Above Reticle (Image 5) ----
-      ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'bottom';
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
-      ctx.shadowBlur = 6;
-      ctx.fillText(target.name || 'Building', 0, -ringRadius - 10);
+      // Connecting stem line
+      ctx.beginPath();
+      ctx.moveTo(0, arrowBaseY);
+      ctx.lineTo(0, -ringRadius - 16);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = target.isDest ? '#00e5cc' : '#ffffff';
+      ctx.stroke();
 
-      // Distance Tag below
+      // ---- 3. Small Overlayed Box: Building Name + Purpose ----
+      const purpose = target.purpose || '';
       const distText = dist < 1000 ? `${Math.round(dist)} m` : `${(dist / 1000).toFixed(1)} km`;
+      const nameText = target.name || 'Building';
+
+      ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      const nameW = ctx.measureText(nameText).width;
       ctx.font = 'bold 11px monospace';
-      ctx.fillStyle = target.isDest ? '#00e5cc' : 'rgba(255, 255, 255, 0.9)';
-      ctx.fillText(distText, 0, -ringRadius - 28);
+      const distW = ctx.measureText(distText).width;
+      ctx.font = '500 10.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      const purpW = purpose ? ctx.measureText(purpose).width : 0;
+
+      const cardW = Math.max(160, Math.min(270, Math.max(nameW + distW + 36, purpW + 20)));
+      const cardH = purpose ? 52 : 36;
+      const cardX = -cardW / 2;
+      const cardY = -ringRadius - 16 - cardH;
+      const radius = 10;
+
+      // Draw Glassmorphic Card Background
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(cardX, cardY, cardW, cardH, radius);
+      } else {
+        ctx.rect(cardX, cardY, cardW, cardH);
+      }
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = target.isDest ? '#00e5cc' : 'rgba(255, 255, 255, 0.75)';
+      ctx.stroke();
+
+      // Row 1: Building Name & Distance
+      ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(nameText, cardX + 10, cardY + (purpose ? 16 : cardH / 2));
+
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = target.isDest ? '#00e5cc' : '#99f6e4';
+      ctx.fillText(distText, cardX + cardW - 10, cardY + (purpose ? 16 : cardH / 2));
+
+      // Row 2: Purpose Pill
+      if (purpose) {
+        const pillY = cardY + 28;
+        const pillH = 17;
+        const pillW = cardW - 16;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(cardX + 8, pillY, pillW, pillH, 4);
+        } else {
+          ctx.rect(cardX + 8, pillY, pillW, pillH);
+        }
+        ctx.fillStyle = target.isDest ? 'rgba(0, 229, 204, 0.18)' : 'rgba(255, 255, 255, 0.12)';
+        ctx.fill();
+
+        ctx.font = '500 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = target.isDest ? '#99f6e4' : '#e2e8f0';
+
+        // Clip text if necessary
+        let dispPurp = purpose;
+        if (ctx.measureText(dispPurp).width > pillW - 10) {
+          while (dispPurp.length > 5 && ctx.measureText(dispPurp + '…').width > pillW - 10) {
+            dispPurp = dispPurp.slice(0, -1);
+          }
+          dispPurp += '…';
+        }
+        ctx.fillText(dispPurp, cardX + 13, pillY + pillH / 2 + 0.5);
+      }
 
       ctx.restore();
     }

@@ -48,6 +48,11 @@ class RouteProvider {
    */
   async getWalkingRoute(from, to) {
     try {
+      // 1. High-precision surveyed campus walk route (Ladies Hostel G/H/J & Hostel Road)
+      const campusRoute = this._getCampusWalkRoute(from, to);
+      if (campusRoute) return campusRoute;
+
+      // 2. Fall back to external routing APIs
       if (this.provider === 'gmaps' && this.gmapsApiKey) {
         return await this._getRouteGmaps(from, to);
       }
@@ -164,11 +169,181 @@ class RouteProvider {
         lat: parseFloat(r.lat),
         lon: parseFloat(r.lon),
       }));
-    } catch (err) {
-      console.warn('Geocode failed:', err);
-      return [];
+  // ------------------------------------------------------------------
+  // High-precision surveyed campus walk route (Ladies Hostel G/H/J)
+  // Direct walkway geometry from OpenStreetMap survey (map.osm)
+  // ------------------------------------------------------------------
+  _getCampusWalkRoute(from, to) {
+    if (!from || !to) return null;
+    const campusCenter = { lat: 12.9680, lon: 79.1593 };
+    const maxRadius = 350; // meters from campus center
+
+    const distFrom = _haversineMeters(from.lat, from.lon, campusCenter.lat, campusCenter.lon);
+    const distTo   = _haversineMeters(to.lat, to.lon, campusCenter.lat, campusCenter.lon);
+    if (distFrom > maxRadius || distTo > maxRadius) return null;
+
+    // Find closest graph node to from & to
+    let startNode = null;
+    let endNode = null;
+    let minStartD = Infinity;
+    let minEndD = Infinity;
+
+    for (const [id, n] of Object.entries(CAMPUS_WALK_NODES)) {
+      const d1 = _haversineMeters(from.lat, from.lon, n.lat, n.lon);
+      if (d1 < minStartD) { minStartD = d1; startNode = id; }
+      const d2 = _haversineMeters(to.lat, to.lon, n.lat, n.lon);
+      if (d2 < minEndD) { minEndD = d2; endNode = id; }
     }
+
+    if (!startNode || !endNode) return null;
+
+    // Dijkstra shortest path
+    const dist = {};
+    const prev = {};
+    const queue = new Set(Object.keys(CAMPUS_WALK_NODES));
+    for (const k of Object.keys(CAMPUS_WALK_NODES)) dist[k] = Infinity;
+    dist[startNode] = 0;
+
+    while (queue.size > 0) {
+      let u = null;
+      let minD = Infinity;
+      for (const q of queue) {
+        if (dist[q] < minD) { minD = dist[q]; u = q; }
+      }
+      if (u === null || u === endNode) break;
+      queue.delete(u);
+
+      const neighbors = CAMPUS_WALK_ADJ[u] || [];
+      for (const nb of neighbors) {
+        if (!queue.has(nb.id)) continue;
+        const alt = dist[u] + nb.dist;
+        if (alt < dist[nb.id]) {
+          dist[nb.id] = alt;
+          prev[nb.id] = u;
+        }
+      }
+    }
+
+    if (dist[endNode] === Infinity) return null;
+
+    const pathIds = [];
+    let curr = endNode;
+    while (curr) {
+      pathIds.unshift(curr);
+      curr = prev[curr];
+    }
+
+    const rawPoints = pathIds.map(id => [CAMPUS_WALK_NODES[id].lat, CAMPUS_WALK_NODES[id].lon]);
+    // Prepend origin and append destination if not identical
+    const points = [[from.lat, from.lon]];
+    for (const p of rawPoints) {
+      const last = points[points.length - 1];
+      if (_haversineMeters(last[0], last[1], p[0], p[1]) > 1.5) {
+        points.push(p);
+      }
+    }
+    const lastP = points[points.length - 1];
+    if (_haversineMeters(lastP[0], lastP[1], to.lat, to.lon) > 1.5) {
+      points.push([to.lat, to.lon]);
+    }
+
+    let totalDist = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+      totalDist += _haversineMeters(points[i][0], points[i][1], points[i+1][0], points[i+1][1]);
+    }
+
+    const steps = [
+      {
+        instruction: `Head along Hostel Road toward ${CAMPUS_WALK_NODES[startNode]?.name || 'pathway'}.`,
+        distanceMeters: minStartD,
+      }
+    ];
+    if (pathIds.length > 1) {
+      steps.push({
+        instruction: `Follow the pedestrian pathway toward ${CAMPUS_WALK_NODES[endNode]?.name || 'destination'}.`,
+        distanceMeters: dist[endNode],
+      });
+    }
+
+    return {
+      points,
+      distanceMeters: totalDist,
+      durationSeconds: Math.round(totalDist / 1.2), // ~1.2 m/s walking speed
+      steps,
+    };
   }
+}
+
+// Surveyed pedestrian walkway network for Ladies Hostel G/H/J & Hostel Road (from map.osm)
+const CAMPUS_WALK_NODES = {
+  '14165878668': { lat: 12.9678623, lon: 79.1591697, name: 'Hostel Road near Guest House' },
+  '14165878669': { lat: 12.9679849, lon: 79.1591590, name: 'J Block South Foyer Entrance' },
+  '14165878670': { lat: 12.9680110, lon: 79.1589930, name: 'J Block West Lift Entrance' },
+  '10032723291': { lat: 12.9683349, lon: 79.1589822, name: 'J Block North-West Corner' },
+  '14165878671': { lat: 12.9683346, lon: 79.1594027, name: 'J Block North-East Bend' },
+  '14165878672': { lat: 12.9681441, lon: 79.1594053, name: 'Central Crossroad between J & H' },
+  '14165907135': { lat: 12.9680005, lon: 79.1594026, name: 'Passageway between J & H' },
+  '14165878673': { lat: 12.9681076, lon: 79.1595178, name: 'H Block West Entrance' },
+  '14093702530': { lat: 12.9683070, lon: 79.1595854, name: 'H Block North-West Path' },
+  '14165878674': { lat: 12.9683998, lon: 79.1594990, name: 'North Road Pathway' },
+  '14165878675': { lat: 12.9685617, lon: 79.1594558, name: 'Hostel Complex Main Gate' },
+  '14165878676': { lat: 12.9677647, lon: 79.1595216, name: 'Courtyard & Mess Walkway' },
+  '14093702529': { lat: 12.9677686, lon: 79.1593426, name: 'G Block North Entrance' },
+  '14093702528': { lat: 12.9677581, lon: 79.1598230, name: 'G Block East Road' },
+  'n_gh':        { lat: 12.9677940, lon: 79.1588970, name: 'VIT Guest House' },
+  'n_park':      { lat: 12.9676287, lon: 79.1592126, name: 'Campus Parking Area' },
+  'b_g':         { lat: 12.9676012, lon: 79.1594861, name: 'Ladies Hostel G' },
+  'b_h':         { lat: 12.9680394, lon: 79.1596759, name: 'Ladies Hostel H' },
+  'b_j':         { lat: 12.9681335, lon: 79.1591946, name: 'Ladies Hostel J' },
+};
+
+const CAMPUS_WALK_EDGES = [
+  ['14165878668', '14093702529'],
+  ['14093702529', '14165878676'],
+  ['14165878676', '14093702528'],
+  ['14165878676', '14165878673'],
+  ['14165878672', '14165907135'],
+  ['14165907135', '14165878669'],
+  ['14165878668', '14165878669'],
+  ['14165878669', '14165878670'],
+  ['14165878670', '10032723291'],
+  ['10032723291', '14165878671'],
+  ['14165878671', '14165878672'],
+  ['14165878672', '14165878673'],
+  ['14165878673', '14093702530'],
+  ['14093702530', '14165878674'],
+  ['14165878674', '14165878675'],
+  ['14165878668', 'n_park'],
+  ['14165878668', 'n_gh'],
+  ['b_g', '14093702529'],
+  ['b_g', '14165878676'],
+  ['b_h', '14165878673'],
+  ['b_j', '14165878669'],
+  ['b_j', '14165878672'],
+];
+
+// Pre-compute campus walkway adjacency graph
+const CAMPUS_WALK_ADJ = {};
+for (const k of Object.keys(CAMPUS_WALK_NODES)) CAMPUS_WALK_ADJ[k] = [];
+for (const [a, b] of CAMPUS_WALK_EDGES) {
+  if (CAMPUS_WALK_NODES[a] && CAMPUS_WALK_NODES[b]) {
+    const d = _haversineMeters(
+      CAMPUS_WALK_NODES[a].lat, CAMPUS_WALK_NODES[a].lon,
+      CAMPUS_WALK_NODES[b].lat, CAMPUS_WALK_NODES[b].lon
+    );
+    CAMPUS_WALK_ADJ[a].push({ id: b, dist: d });
+    CAMPUS_WALK_ADJ[b].push({ id: a, dist: d });
+  }
+}
+
+function _haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // ------------------------------------------------------------------

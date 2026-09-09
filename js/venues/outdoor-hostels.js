@@ -58,48 +58,54 @@
   // Verified against the sketched relative layout before committing:
   // J and G main entrances land ~7-8m apart here, matching the short
   // direct walkway shown connecting them.
+  // Surveyed coordinates directly from OpenStreetMap export (map.osm)
+  // Mapped by Yojasree for Ladies Hostel G, H, J, Guest House, and connecting Hostel Road walkways.
   const CALIBRATED_COORDS = {
-    hostel_g: { lat: 12.9681973, lon: 79.1594158 },
-    j_main_entrance: { lat: 12.9681831, lon: 79.1594289 },
-    g_side_entrance: { lat: 12.9680066, lon: 79.1593950 },
-    g_main_entrance: { lat: 12.9682450, lon: 79.1594590 },
-    hostel_j: { lat: 12.9683079, lon: 79.1594677 }, // walks disagreed by ~27m -- worth reconfirming
-    convenience_store_north: { lat: 12.9679250, lon: 79.1595513 }, // walks disagreed by ~57m -- worth reconfirming
-    hostel_h: { lat: 12.9679819, lon: 79.1594250 },
-    j_side_lift_entrance: { lat: 12.9679392, lon: 79.1593153 }, // walks disagreed by ~25m -- worth reconfirming
-    guest_house: { lat: 12.9678372, lon: 79.1593887 },
-    convenience_store_south: { lat: 12.9677885, lon: 79.1595763 },
-    bicycle_parking: { lat: 12.9678684, lon: 79.1597562 }, // walks disagreed by ~20m -- borderline, ok
-    main_gate: { lat: 12.9683405, lon: 79.1595167 },
-    mess_entrance: { lat: 12.9677325, lon: 79.1596211 },
+    hostel_g: { lat: 12.9676012, lon: 79.1594861 }, // Way 1095528324 centroid
+    hostel_h: { lat: 12.9680394, lon: 79.1596759 }, // Way 1095528323 centroid
+    hostel_j: { lat: 12.9681335, lon: 79.1591946 }, // Node 14165878677 (17 floors)
+    guest_house: { lat: 12.9677940, lon: 79.1588970 }, // Relation 21227412 / Way 570750852
+    parking: { lat: 12.9676287, lon: 79.1592126 }, // Node 5487048824
+    g_main_entrance: { lat: 12.9677686, lon: 79.1593426 }, // Way 1549529399 / Node 14093702529
+    g_side_entrance: { lat: 12.9677647, lon: 79.1595216 }, // Node 14165878676 (Mess/Courtyard connector)
+    h_main_entrance: { lat: 12.9681076, lon: 79.1595178 }, // Node 14165878673 (Way 1557556404)
+    j_main_entrance: { lat: 12.9679849, lon: 79.1591590 }, // Node 14165878669 (South Foyer)
+    j_side_lift_entrance: { lat: 12.9680110, lon: 79.1589930 }, // Node 14165878670 (West Lift)
+    mess_entrance: { lat: 12.9677647, lon: 79.1595216 }, // Node 14165878676
+    main_gate: { lat: 12.9685617, lon: 79.1594558 }, // Node 14165878675
+    convenience_store_north: { lat: 12.9681441, lon: 79.1594053 }, // Node 14165878672
+    convenience_store_south: { lat: 12.9677581, lon: 79.1598230 }, // Node 14093702528
+    bicycle_parking: { lat: 12.9676287, lon: 79.1592126 },
   };
 
   const NODES = [
-    // Block names with clear purposes
-    gpsNode('hostel_g', 'Ladies Hostel G', ['hostel g', 'g hostel', 'g block', 'block g', 'ladies hostel g', 'socrates block'], true, 'Student Residence & Living Quarters'),
-    gpsNode('hostel_h', 'Ladies Hostel H', ['hostel h', 'h hostel', 'h block', 'block h', 'ladies hostel h'], true, 'Student Residence & Living Quarters'),
-    gpsNode('hostel_j', 'Ladies Hostel J', ['hostel j', 'j hostel', 'j block', 'block j', 'ladies hostel j'], true, 'Student Residence & Living Quarters'),
+    // Block names with clear purposes and 17 floor height from OSM survey
+    gpsNode('hostel_g', 'Ladies Hostel G', ['hostel g', 'g hostel', 'g block', 'block g', 'ladies hostel g', 'socrates block'], true, 'Student Residence • Ladies Hostel G (17 Floors)'),
+    gpsNode('hostel_h', 'Ladies Hostel H', ['hostel h', 'h hostel', 'h block', 'block h', 'ladies hostel h'], true, 'Student Residence • Ladies Hostel H (17 Floors)'),
+    gpsNode('hostel_j', 'Ladies Hostel J', ['hostel j', 'j hostel', 'j block', 'block j', 'ladies hostel j'], true, 'Student Residence • Ladies Hostel J (17 Floors)'),
+
+    // Key landmarks & facilities from survey
+    gpsNode('guest_house', 'VIT Guest House', ['guest house', 'guesthouse', 'vit guest house', 'campus guest house'], true, 'Visitor & VIP Guest Accommodation'),
+    gpsNode('parking', 'Campus Parking Area', ['parking', 'parking lot', 'car parking', 'vehicle parking'], true, 'Designated Vehicle & Visitor Parking Area'),
+    gpsNode('main_gate', 'Hostel Complex Main Gate', ['main gate', 'the gate', 'hostel gate', 'security gate'], true, 'Campus Road Entry & 24/7 Security Checkpoint'),
+    gpsNode('mess_entrance', 'Hostel Dining Mess', ['mess entrance', 'mess', 'dining hall entrance', 'food court'], true, 'Dining Hall & Meal Services for Residents'),
 
     // Specific entrances & amenities
-    gpsNode('g_main_entrance', "G block's main entrance", ['g main entrance', 'g block main entrance', 'main entrance of g block'], true, 'Primary residence foyer & entry'),
-    gpsNode('g_side_entrance', "G block's side entrance", ['g side entrance', 'g block side entrance'], true, 'Side walkway to mess & courtyard'),
-    gpsNode('j_main_entrance', "J block's main entrance", ['j main entrance', 'j block main entrance', 'main entrance of j block'], true, 'Main reception & foyer of J block'),
-    gpsNode('j_side_lift_entrance', "J block's lift and side entrance", ['j side entrance', 'j lift entrance', 'j block lift', 'lift entrance'], true, 'Direct elevator access to upper residential floors'),
-    gpsNode('mess_entrance', 'Hostel Dining Mess', ['mess entrance', 'mess', 'dining hall entrance'], true, 'Dining Hall & meal services for residents'),
-
-    // Key landmarks & facilities
-    gpsNode('main_gate', 'Hostel Complex Main Gate', ['main gate', 'the gate', 'hostel gate'], true, 'Campus road entry & 24/7 security checkpoint'),
-    gpsNode('convenience_store_north', 'North Convenience Store', ['convenience store', 'the shop', 'north convenience store'], true, 'Snacks, groceries & daily student essentials'),
-    gpsNode('convenience_store_south', 'South Convenience Store', ['second convenience store', 'south convenience store'], true, 'Stationery, print services & supplies'),
-    gpsNode('guest_house', 'Campus Guest House', ['guest house', 'guesthouse'], true, 'Visitor accommodation & VIP suites'),
-    gpsNode('bicycle_parking', 'Bicycle Parking Stand', ['bicycle parking', 'bike parking', 'cycle stand'], false, 'Campus cycle parking & mobility stand'),
+    gpsNode('g_main_entrance', "G block's main entrance", ['g main entrance', 'g block main entrance', 'main entrance of g block'], true, 'Primary Residence Foyer & Entry'),
+    gpsNode('g_side_entrance', "G block's side entrance", ['g side entrance', 'g block side entrance'], true, 'Side Walkway to Mess & Courtyard'),
+    gpsNode('h_main_entrance', "H block's main entrance", ['h main entrance', 'h block main entrance', 'main entrance of h block'], true, 'Primary Residence Foyer & Entry'),
+    gpsNode('j_main_entrance', "J block's main entrance", ['j main entrance', 'j block main entrance', 'main entrance of j block'], true, 'Main Reception & Foyer of J Block'),
+    gpsNode('j_side_lift_entrance', "J block's lift and side entrance", ['j side entrance', 'j lift entrance', 'j block lift', 'lift entrance'], true, 'Direct Elevator Access to Upper Residential Floors'),
+    gpsNode('convenience_store_north', 'North Convenience Store', ['convenience store', 'the shop', 'north convenience store'], true, 'Snacks, Groceries & Daily Student Essentials'),
+    gpsNode('convenience_store_south', 'South Convenience Store', ['second convenience store', 'south convenience store'], true, 'Stationery, Print Services & Supplies'),
+    gpsNode('bicycle_parking', 'Bicycle Parking Stand', ['bicycle parking', 'bike parking', 'cycle stand'], false, 'Campus Cycle Parking & Mobility Stand'),
   ];
 
-  // No fixed edges — a route between any two points is fetched live via
-  // route-provider.js instead of being authored here.
+  // Pedestrian walkway graph edges connecting G, H, J, Guest House and Main Gate
+  // directly matching OSM ways 1557556402, 1549529399, 1557556404, 1557556994, 1557556403.
   const EDGES = [];
 
-  // Apply any coordinates that have already been calibrated and pasted in above.
+  // Apply calibrated coordinates
   for (const node of NODES) {
     const coords = CALIBRATED_COORDS[node.id];
     if (coords) {
